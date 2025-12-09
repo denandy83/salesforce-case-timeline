@@ -189,11 +189,14 @@ public without sharing class ND_CaseTimelineController {
 
     private static Map<String, String> getStatusMap() {
         Map<String, String> m = new Map<String, String>();
-        // Defaults
+        // RESTORED FULL MAPPINGS
         m.put('1', 'New');
         m.put('2', 'On Hold');
         m.put('3', 'Closed');
-        m.put('9', 'Solved'); 
+        m.put('6', 'Open');
+        m.put('7', 'Working');
+        m.put('8', 'Waiting for Customer');
+        m.put('9', 'Solved');
         
         try {
             Schema.DescribeFieldResult fieldResult = Case.Status.getDescribe();
