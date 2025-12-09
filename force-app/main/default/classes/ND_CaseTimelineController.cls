@@ -1,5 +1,5 @@
-public with sharing class ND_CaseTimelineController {
-    
+public without sharing class ND_CaseTimelineController {
+
     public class TimelineItem implements Comparable {
         @AuraEnabled public String id;
         @AuraEnabled public DateTime createdDate;
@@ -41,7 +41,6 @@ public with sharing class ND_CaseTimelineController {
             ND_EmailCompare.ComparisonResult res = ND_EmailCompare.parse(
                 em.HtmlBody, em.TextBody, null, null
             );
-
             item.body = cleanHtml(res.newContent);
             item.historyBody = cleanHtml(res.historyContent);
             item.hasHistory = res.hasHistory;
@@ -49,12 +48,13 @@ public with sharing class ND_CaseTimelineController {
         }
 
         // 2. Fetch Chatter
-        for(CaseFeed cf : [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility,
-                                  (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges) 
-                           FROM CaseFeed 
-                           WHERE ParentId = :caseId 
-                           ORDER BY CreatedDate DESC]) {
-            
+        List<CaseFeed> feeds = [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility,
+                                     (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges) 
+                                FROM CaseFeed 
+                                WHERE ParentId = :caseId 
+                                ORDER BY CreatedDate DESC];
+
+        for(CaseFeed cf : feeds) {
             if (cf.Type == 'EmailMessageEvent') continue;
 
             TimelineItem item = new TimelineItem();
@@ -63,7 +63,7 @@ public with sharing class ND_CaseTimelineController {
             item.author = cf.CreatedBy.Name;
             item.hasHistory = false;
 
-            // CATEGORIZATION
+            // Categorization
             Boolean isSystemType = (cf.Type == 'TrackedChange' || 
                                     cf.Type == 'CreateRecordEvent' || 
                                     cf.Type == 'ActivityEvent' ||
@@ -85,19 +85,40 @@ public with sharing class ND_CaseTimelineController {
                 item.title = '🔒 Internal Note';
             }
             
-            // BODY PROCESSING
             String rawBody = (cf.Body != null) ? cf.Body : '';
-            // Double Unescape to be safe against &amp;quot;
-            String cleanBody = rawBody.unescapeHtml4().unescapeHtml4(); 
+            String cleanBody = rawBody.unescapeHtml4().unescapeHtml4().replace('&nbsp;', ' ');
+            String parsedResult = null;
 
-            // A. Check Child Table (Cleanest data)
-            if (cf.FeedTrackedChanges != null && !cf.FeedTrackedChanges.isEmpty()) {
+            // PRIORITY 1: Check Main Body for JSON
+            if (cleanBody.containsIgnoreCase('feedEvent') || cleanBody.contains('{"fu"')) {
+                parsedResult = parseFeedEventString(cleanBody, statusMap);
+            }
+
+            if (parsedResult != null) {
+                item.body = parsedResult;
+            }
+            // PRIORITY 2: Check Child Table
+            else if (cf.FeedTrackedChanges != null && !cf.FeedTrackedChanges.isEmpty()) {
                 List<String> changes = new List<String>();
                 for (FeedTrackedChange ftc : cf.FeedTrackedChanges) {
+                    
                     String field = (ftc.FieldName != null) ? ftc.FieldName : 'Field';
                     String oldV = String.valueOf(ftc.OldValue);
                     String newV = String.valueOf(ftc.NewValue);
 
+                    // --- CRITICAL FIX: Check if the Old/New Value ITSELF is the JSON blob ---
+                    String potentialJson = (oldV != null && oldV.contains('{"fu"')) ? oldV : 
+                                           (newV != null && newV.contains('{"fu"')) ? newV : null;
+
+                    if (potentialJson != null) {
+                        String fix = parseFeedEventString(potentialJson, statusMap);
+                        if (fix != null) {
+                            changes.add(fix);
+                            continue; // Found JSON in column, use the parsed version
+                        }
+                    }
+
+                    // Standard Field Mapping
                     if (field == 'Status') {
                         if (statusMap.containsKey(oldV)) oldV = statusMap.get(oldV);
                         if (statusMap.containsKey(newV)) newV = statusMap.get(newV);
@@ -105,7 +126,7 @@ public with sharing class ND_CaseTimelineController {
                     if (oldV == null) oldV = '(blank)';
                     if (newV == null) newV = '(blank)';
                     
-                    if (oldV == '(blank)' && newV == '(blank)' && ftc.OldValue == null && ftc.NewValue == null) {
+                    if (oldV == '(blank)' && newV == '(blank)') {
                          changes.add('<b>' + field + '</b>: <i>(Updated)</i>');
                     } else {
                          changes.add('<b>' + field + '</b>: ' + oldV + ' &rarr; ' + newV);
@@ -113,12 +134,7 @@ public with sharing class ND_CaseTimelineController {
                 }
                 item.body = String.join(changes, '<br/>');
             } 
-            // B. Jumbled JSON Detection (Regex Force)
-            else if (cleanBody.contains('feedEvent:') || cleanBody.contains('{"fu":')) {
-                // Use Regex Parser
-                item.body = parseStatusJsonRegex(cleanBody, statusMap);
-            }
-            // C. Standard Body
+            // PRIORITY 3: Fallback
             else if (String.isNotBlank(cleanBody)) {
                 item.body = cleanBody;
             } else {
@@ -132,56 +148,61 @@ public with sharing class ND_CaseTimelineController {
         return combinedList;
     }
 
-    // --- REGEX PARSER: Extracts {"fu": ... } regardless of garbage text ---
-    private static String parseStatusJsonRegex(String cleanBody, Map<String, String> statusMap) {
+    // --- HELPER: JSON PARSER ---
+    private static String parseFeedEventString(String cleanBody, Map<String, String> statusMap) {
         try {
-            // Pattern matches: { ... "fu": ... } 
-            // We use non-greedy matching .*? to find the JSON block
-            Pattern p = Pattern.compile('\\{.*?\"fu\":.*?\\}');
-            Matcher m = p.matcher(cleanBody);
+            Integer idxStart = cleanBody.indexOf('{');
+            Integer idxEnd = cleanBody.lastIndexOf('}');
             
-            if (m.find()) {
-                String cleanJson = m.group(0); 
-                
-                Map<String, Object> root = (Map<String, Object>) JSON.deserializeUntyped(cleanJson);
-                
-                if (root.containsKey('fu')) {
-                    List<Object> fieldUpdates = (List<Object>) root.get('fu');
-                    if (!fieldUpdates.isEmpty()) {
-                        Map<String, Object> updateMap = (Map<String, Object>) fieldUpdates[0];
-                        String field = (String) updateMap.get('fn'); 
-                        String oldV = (String) updateMap.get('ov'); 
-                        String newV = (String) updateMap.get('nv'); 
+            if (idxStart == -1 || idxEnd == -1 || idxEnd <= idxStart) return null;
+
+            String jsonPart = cleanBody.substring(idxStart, idxEnd + 1);
+            jsonPart = jsonPart.replace('“', '"').replace('”', '"'); // Sanitize quotes
+
+            Map<String, Object> root = (Map<String, Object>) JSON.deserializeUntyped(jsonPart);
+            
+            if (root.containsKey('fu')) {
+                List<Object> fieldUpdates = (List<Object>) root.get('fu');
+                for (Object itemObj : fieldUpdates) {
+                    Map<String, Object> updateMap = (Map<String, Object>) itemObj;
+                    
+                    String field = String.valueOf(updateMap.get('fn')); 
+                    String oldV = String.valueOf(updateMap.get('ov')); 
+                    String newV = String.valueOf(updateMap.get('nv')); 
+                    
+                    if (field == 'Status') {
+                        if (statusMap.containsKey(oldV)) oldV = statusMap.get(oldV);
+                        if (statusMap.containsKey(newV)) newV = statusMap.get(newV);
                         
-                        // Map 7 -> Working
-                        if (field == 'Status') {
-                            if (statusMap.containsKey(oldV)) oldV = statusMap.get(oldV);
-                            if (statusMap.containsKey(newV)) newV = statusMap.get(newV);
-                        }
-                        
-                        if (oldV == null) oldV = '(blank)';
-                        if (newV == null) newV = '(blank)';
+                        if (String.isBlank(oldV) || oldV == 'null') oldV = '(blank)';
+                        if (String.isBlank(newV) || newV == 'null') newV = '(blank)';
                         
                         return '<b>' + field + '</b>: ' + oldV + ' &rarr; ' + newV;
                     }
                 }
             }
-            // If Regex fails, debug it and return raw
-            System.debug('JSON REGEX FAILED on: ' + cleanBody);
-            return '<i>' + cleanBody + '</i>';
+            return null;
         } catch (Exception e) {
-            System.debug('JSON PARSE EXCEPTION: ' + e.getMessage());
-            return '<i>[Status Update - Details unavailable]</i>';
+            return null; 
         }
     }
 
     private static Map<String, String> getStatusMap() {
-        Map<String, String> resultMap = new Map<String, String>();
-        for (CaseStatus cs : [SELECT MasterLabel, ApiName FROM CaseStatus]) {
-            resultMap.put(cs.ApiName, cs.MasterLabel); 
-            resultMap.put(cs.MasterLabel, cs.MasterLabel);
-        }
-        return resultMap;
+        Map<String, String> m = new Map<String, String>();
+        // Defaults
+        m.put('1', 'New');
+        m.put('2', 'On Hold');
+        m.put('3', 'Closed');
+        m.put('9', 'Solved'); 
+        
+        try {
+            Schema.DescribeFieldResult fieldResult = Case.Status.getDescribe();
+            for(Schema.PicklistEntry f : fieldResult.getPicklistValues()) {
+                m.put(f.getValue(), f.getLabel());
+                m.put(f.getLabel(), f.getLabel());
+            }
+        } catch (Exception e) { }
+        return m;
     }
 
     private static String formatSystemTitle(String type) {

@@ -1,56 +1,28 @@
 <template>
     <lightning-card variant="narrow">
-        
         <div class="slds-p-horizontal_medium slds-p-bottom_small slds-border_bottom">
             <div class="slds-grid slds-grid_vertical-align-center slds-wrap">
-                
                 <div class="slds-col slds-grow">
                     <div class="slds-form-element">
                         <div class="slds-form-element__control">
                             <div class="slds-checkbox_button-group">
-                                <span class="slds-m-right_medium">
-                                    <lightning-input type="checkbox" label="Emails" name="email" checked={showEmail} onchange={handleToggle}></lightning-input>
-                                </span>
-                                <span class="slds-m-right_medium">
-                                    <lightning-input type="checkbox" label="Public" name="public" checked={showPublic} onchange={handleToggle}></lightning-input>
-                                </span>
-                                <span class="slds-m-right_medium">
-                                    <lightning-input type="checkbox" label="Internal" name="internal" checked={showInternal} onchange={handleToggle}></lightning-input>
-                                </span>
-                                <span>
-                                    <lightning-input type="checkbox" label="System" name="system" checked={showSystem} onchange={handleToggle}></lightning-input>
-                                </span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Emails" name="email" checked={showEmail} onchange={handleToggle}></lightning-input></span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Public" name="public" checked={showPublic} onchange={handleToggle}></lightning-input></span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Internal" name="internal" checked={showInternal} onchange={handleToggle}></lightning-input></span>
+                                <span><lightning-input type="checkbox" label="System" name="system" checked={showSystem} onchange={handleToggle}></lightning-input></span>
                             </div>
                         </div>
                     </div>
                 </div>
-
                 <div class="slds-col slds-no-flex">
                     <div class="slds-grid slds-grid_vertical-align-center">
-                        <span class="slds-text-body_small slds-text-color_weak slds-m-right_x-small">
-                            {sortLabel}
-                        </span>
-                        
-                        <lightning-button-icon 
-                            icon-name={sortIcon} 
-                            alternative-text="Sort" 
-                            variant="border-filled"
-                            onclick={handleSortToggle}>
-                        </lightning-button-icon>
-
-                        <lightning-button-icon 
-                            icon-name="utility:refresh" 
-                            alternative-text="Refresh Feed" 
-                            variant="border-filled"
-                            class="slds-m-left_x-small"
-                            onclick={handleRefresh}>
-                        </lightning-button-icon>
+                        <span class="slds-text-body_small slds-text-color_weak slds-m-right_x-small">{sortLabel}</span>
+                        <lightning-button-icon icon-name={sortIcon} alternative-text="Sort" variant="border-filled" onclick={handleSortToggle}></lightning-button-icon>
+                        <lightning-button-icon icon-name="utility:refresh" alternative-text="Refresh Feed" variant="border-filled" class="slds-m-left_x-small" onclick={handleRefresh}></lightning-button-icon>
                     </div>
                 </div>
-
             </div>
         </div>
-
         <div class="slds-p-around_medium slds-scrollable_y" style="height:500px;">
             <template if:true={filteredData}>
                 <template for:each={filteredData} for:item="item">
@@ -58,14 +30,9 @@
                     <div key={item.id} class={item.boxClass} style={item.rowStyle}>
                         
                         <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
-                            <div class="slds-truncate slds-text-heading_small" title={item.title}>
-                                <strong>{item.title}</strong>
-                            </div>
-                            <div class="slds-text-color_weak slds-text-body_small">
-                                <lightning-formatted-date-time value={item.createdDate} year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time>
-                            </div>
+                            <div class="slds-truncate slds-text-heading_small" title={item.title}><strong>{item.title}</strong></div>
+                            <div class="slds-text-color_weak slds-text-body_small"><lightning-formatted-date-time value={item.createdDate} year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time></div>
                         </div>
-
                         <div class="slds-text-body_small slds-m-bottom_small">
                             <span class="slds-badge slds-theme_success" if:true={item.isEmailCategory}>Email</span>
                             <span class="slds-badge" if:true={item.isPublicCategory}>Public</span>
@@ -73,36 +40,22 @@
                             <span class="slds-badge slds-theme_inverse" if:true={item.isSystemCategory}>System</span>
                             <span class="slds-m-left_small">From: <b>{item.author}</b></span>
                         </div>
-
-                        <div class="email-body-main">
-                            <lightning-formatted-rich-text value={item.body}></lightning-formatted-rich-text>
-                        </div>
-
+                        <div class="email-body-main"><lightning-formatted-rich-text value={item.body}></lightning-formatted-rich-text></div>
                         <template if:true={item.hasHistory}>
                             <div class="slds-m-top_small slds-text-align_center">
-                                <a href="javascript:void(0);" 
-                                   onclick={handleHistoryToggle} 
-                                   data-id={item.id}
-                                   class="slds-text-link_reset slds-text-color_brand">
+                                <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id} class="slds-text-link_reset slds-text-color_brand">
                                     <template if:false={item.historyExpanded}>Show More...</template>
                                     <template if:true={item.historyExpanded}>Show Less</template>
                                 </a>
                             </div>
                             <template if:true={item.historyExpanded}>
-                                <div class="slds-m-top_x-small slds-p-around_small slds-theme_shade email-history-content">
-                                    <lightning-formatted-rich-text value={item.historyBody}></lightning-formatted-rich-text>
-                                </div>
+                                <div class="slds-m-top_x-small slds-p-around_small slds-theme_shade email-history-content"><lightning-formatted-rich-text value={item.historyBody}></lightning-formatted-rich-text></div>
                             </template>
                         </template>
-
                     </div>
                 </template>
             </template>
-
-            <template if:false={hasData}>
-                <p class="slds-align_absolute-center">No items found.</p>
-            </template>
+            <template if:false={hasData}><p class="slds-align_absolute-center">No items found.</p></template>
         </div>
-
     </lightning-card>
 </template>

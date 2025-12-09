@@ -5,34 +5,28 @@ import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimel
 export default class Nd_CaseTimeline extends LightningElement {
     @api recordId; 
     @track allItems = [];
-
     @track showEmail = true;
     @track showPublic = true;
     @track showInternal = true;
     @track showSystem = false;
-
     @track sortDirection = 'desc'; 
-
     wiredResult;
 
     @wire(getTimelineData, { caseId: '$recordId' })
     wiredData(result) {
         this.wiredResult = result;
         const { error, data } = result;
-
         if (data) {
             this.allItems = data.map(item => ({
                 ...item,
                 historyExpanded: false,
                 
-                // --- INLINE STYLE: #fffeb0 ---
-                // This is the variable the HTML uses. It MUST be here.
+                // --- ADDED !important TO FORCE COLOR ---
                 rowStyle: item.isInternal 
-                    ? 'background-color: #fffeb0; border: 1px solid #e6d38e;' 
+                    ? 'background-color: #fff7d6 !important; border: 1px solid #e6d38e;' 
                     : 'background-color: white;',
                 
                 boxClass: 'slds-box slds-box_x-small slds-m-bottom_small',
-
                 isEmailCategory: item.category === 'Email',
                 isPublicCategory: item.category === 'Public',
                 isInternalCategory: item.category === 'Internal',
@@ -42,8 +36,8 @@ export default class Nd_CaseTimeline extends LightningElement {
             console.error('Error fetching timeline', error);
         }
     }
-
-    // ... (Keep existing Getters and Handlers) ...
+    
+    // ... Same Getters/Handlers ...
     get sortIcon() { return this.sortDirection === 'desc' ? 'utility:arrowdown' : 'utility:arrowup'; }
     get sortLabel() { return this.sortDirection === 'desc' ? 'Newest First' : 'Oldest First'; }
     get filteredData() {
@@ -61,7 +55,6 @@ export default class Nd_CaseTimeline extends LightningElement {
         });
     }
     get hasData() { return this.filteredData && this.filteredData.length > 0; }
-    
     handleToggle(event) {
         const name = event.target.name;
         const checked = event.target.checked;
