@@ -1,15 +1,55 @@
 public with sharing class ND_EmailCompare {
 
-    public class ComparisonResult {
-        public String newContent;      // The fresh reply
-        public String historyContent;  // The hidden history part
-        public Boolean hasHistory;     // Should we show the button?
+    // ==========================================
+    // 1. FLOW INPUT WRAPPER (New - For Flow Only)
+    // ==========================================
+    public class FlowInput {
+        @InvocableVariable(label='Current HTML Body' required=false)
+        public String currentHtml;
+
+        @InvocableVariable(label='Current Text Body' required=false)
+        public String currentText;
+
+        @InvocableVariable(label='Previous HTML Body' required=false)
+        public String previousHtml;
+
+        @InvocableVariable(label='Previous Text Body' required=false)
+        public String previousText;
     }
 
+    // ==========================================
+    // 2. OUTPUT RESULT (Updated with Annotations)
+    // ==========================================
+    public class ComparisonResult {
+        // We add @InvocableVariable so Flow can see these.
+        // We add @AuraEnabled so LWC can see them (if needed in future).
+        // Standard Apex can still read them because they are 'public'.
+        @InvocableVariable @AuraEnabled public String newContent;      
+        @InvocableVariable @AuraEnabled public String historyContent;  
+        @InvocableVariable @AuraEnabled public Boolean hasHistory;     
+    }
+
+    // ==========================================
+    // 3. INVOCABLE METHOD (New - For Flow Only)
+    // ==========================================
+    @InvocableMethod(label='ND_Email Compare' description='Splits email body into New Content and History' category='Email')
+    public static List<ComparisonResult> parseForFlow(List<FlowInput> inputs) {
+        List<ComparisonResult> results = new List<ComparisonResult>();
+        
+        // Loop through flow inputs and call the main logic
+        for (FlowInput input : inputs) {
+            results.add(parse(input.currentHtml, input.currentText, input.previousHtml, input.previousText));
+        }
+        return results;
+    }
+
+    // ==========================================
+    // 4. MAIN LOGIC (Unchanged - Used by Timeline)
+    // ==========================================
     public static ComparisonResult parse(String currentHtml, String currentText, String previousHtml, String previousText) {
         ComparisonResult res = new ComparisonResult();
         
-        // 1. Get the HTML Body (or convert Text to HTML if needed)
+        // 1. Get the HTML Body
         String fullBody = '';
         if (String.isNotBlank(currentHtml)) {
             fullBody = currentHtml;
@@ -17,12 +57,10 @@ public with sharing class ND_EmailCompare {
             fullBody = currentText.replace('\n', '<br/>');
         }
 
-        // 2. Prepare for Matching (Fix &nbsp; and HTML entities that break Regex)
-        // We create a temporary string just for searching, to keep indices aligned.
+        // 2. Prepare for Matching
         String searchBody = fullBody.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>');
 
-        // 3. Find the Split Point using Regex (The safest method)
-        // We look for the standard separators.
+        // 3. Find the Split Point
         Matcher m = getHeaderPattern().matcher(searchBody);
         
         Integer splitIndex = -1;
@@ -32,15 +70,10 @@ public with sharing class ND_EmailCompare {
 
         // 4. Split and Return
         if (splitIndex != -1 && splitIndex > 0) {
-            // Success! The 'New' content is everything before the match.
             res.newContent = fullBody.substring(0, splitIndex);
-            
-            // The 'History' content is the match (The header) + everything after.
-            // This hides the "On Tue..." or "Original Message" line inside the toggle.
             res.historyContent = fullBody.substring(splitIndex);
             res.hasHistory = true;
         } else {
-            // Fallback: If no separator found, show everything as new.
             res.newContent = fullBody;
             res.historyContent = '';
             res.hasHistory = false;
@@ -51,10 +84,6 @@ public with sharing class ND_EmailCompare {
 
     // --- REGEX PATTERNS ---
     private static Pattern getHeaderPattern() {
-        // We combine multiple common patterns into one regex using OR (|)
-        // (?i) = Case Insensitive
-        // (?s) = Dot matches newlines (crucial for Outlook headers)
-        
         String p1 = 'On\\s+[A-Za-z]{3},?.+?wrote:';                         // "On Tue, 25 Nov... wrote:"
         String p2 = '-+\\s*Original Message\\s*-+';                          // "----- Original Message -----"
         String p3 = 'From:\\s+.*\\n?Sent:\\s+.*\\n?To:\\s+.*';               // Outlook "From: ... Sent: ... To:"
