@@ -23,7 +23,7 @@
                 </div>
             </div>
         </div>
-        <div class="slds-p-around_medium slds-scrollable_y" style="height:500px;">
+        <div class="slds-p-around_medium slds-scrollable_y">
             <template if:true={filteredData}>
                 <template for:each={filteredData} for:item="item">
                     
@@ -42,10 +42,10 @@
                         </div>
                         <div class="email-body-main"><lightning-formatted-rich-text value={item.body}></lightning-formatted-rich-text></div>
                         <template if:true={item.hasHistory}>
-                            <div class="slds-m-top_small slds-text-align_center">
+                            <div class="slds-m-top_small slds-text-align_left">
                                 <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id} class="slds-text-link_reset slds-text-color_brand">
-                                    <template if:false={item.historyExpanded}>Show More...</template>
-                                    <template if:true={item.historyExpanded}>Show Less</template>
+                                    <template if:false={item.historyExpanded}><b>Show More...</b></template>
+                                    <template if:true={item.historyExpanded}><b>Show Less</b></template>
                                 </a>
                             </div>
                             <template if:true={item.historyExpanded}>
