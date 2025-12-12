@@ -22,14 +22,31 @@ public without sharing class ND_CaseTimelineController {
 
     @AuraEnabled(cacheable=true)
     public static List<TimelineItem> getTimelineData(Id caseId) {
+        // 1. QUERY THE DATA
+        List<EmailMessage> emails = [SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName 
+                                     FROM EmailMessage 
+                                     WHERE ParentId = :caseId 
+                                     AND Status != '5' 
+                                     ORDER BY MessageDate DESC];
+
+        List<FeedItem> feedItems = [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status,
+                                         (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges) 
+                                    FROM FeedItem 
+                                    WHERE ParentId = :caseId 
+                                    ORDER BY CreatedDate DESC];
+
+        // 2. PASS TO LOGIC (Separation of Concerns)
+        return processItems(emails, feedItems);
+    }
+
+    // @TestVisible lets the Test Class call this with FAKE data
+    @TestVisible 
+    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems) {
         List<TimelineItem> combinedList = new List<TimelineItem>();
         Map<String, String> statusMap = getStatusMap();
 
-        // 1. Fetch Emails
-        for(EmailMessage em : [SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName 
-                               FROM EmailMessage 
-                               WHERE ParentId = :caseId 
-                               ORDER BY MessageDate DESC]) {
+        // --- PROCESS EMAILS ---
+        for(EmailMessage em : emails) {
             TimelineItem item = new TimelineItem();
             item.id = em.Id;
             item.createdDate = em.MessageDate;
@@ -47,20 +64,20 @@ public without sharing class ND_CaseTimelineController {
             combinedList.add(item);
         }
 
-        // 2. Fetch Chatter
-        List<CaseFeed> feeds = [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility,
-                                     (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges) 
-                                FROM CaseFeed 
-                                WHERE ParentId = :caseId 
-                                ORDER BY CreatedDate DESC];
-
-        for(CaseFeed cf : feeds) {
+        // --- PROCESS FEED ITEMS ---
+        for(FeedItem cf : feedItems) {
+            // FILTER DRAFTS
+            if (cf.Status == 'Draft') continue;
+            
+            // Skip email events
             if (cf.Type == 'EmailMessageEvent') continue;
 
             TimelineItem item = new TimelineItem();
             item.id = cf.Id;
             item.createdDate = cf.CreatedDate;
-            item.author = cf.CreatedBy.Name;
+            
+            // Handle mock data where CreatedBy might be null
+            item.author = (cf.CreatedBy != null) ? cf.CreatedBy.Name : 'System';
             item.hasHistory = false;
 
             // Categorization
@@ -69,12 +86,19 @@ public without sharing class ND_CaseTimelineController {
                                     cf.Type == 'ActivityEvent' ||
                                     cf.Type == 'CaseCommentPost' ||
                                     cf.Type == 'ChangeStatusPost' || 
-                                    cf.CreatedBy.Name == 'Automated Process');
+                                    (cf.CreatedBy != null && cf.CreatedBy.Name == 'Automated Process') ||
+                                    cf.Title == 'SYSTEM' || 
+                                    cf.Title == 'MILESTONE');
 
             if (isSystemType) {
                 item.category = 'System';
                 item.isInternal = true; 
-                item.title = '⚙️ ' + formatSystemTitle(cf.Type);
+                
+                if (cf.Title == 'SYSTEM' || cf.Title == 'MILESTONE') {
+                    item.title = '⚙️ ' + cf.Title;
+                } else {
+                    item.title = '⚙️ ' + formatSystemTitle(cf.Type);
+                }
             } else if (cf.Visibility == 'AllUsers') {
                 item.category = 'Public';
                 item.isInternal = false; 
@@ -85,11 +109,11 @@ public without sharing class ND_CaseTimelineController {
                 item.title = '🔒 Internal Note';
             }
             
+            // BODY PROCESSING
             String rawBody = (cf.Body != null) ? cf.Body : '';
             String cleanBody = rawBody.unescapeHtml4().unescapeHtml4().replace('&nbsp;', ' ');
             String parsedResult = null;
 
-            // PRIORITY 1: Check Main Body for JSON
             if (cleanBody.containsIgnoreCase('feedEvent') || cleanBody.contains('{"fu"')) {
                 parsedResult = parseFeedEventString(cleanBody, statusMap);
             }
@@ -97,7 +121,6 @@ public without sharing class ND_CaseTimelineController {
             if (parsedResult != null) {
                 item.body = parsedResult;
             }
-            // PRIORITY 2: Check Child Table
             else if (cf.FeedTrackedChanges != null && !cf.FeedTrackedChanges.isEmpty()) {
                 List<String> changes = new List<String>();
                 for (FeedTrackedChange ftc : cf.FeedTrackedChanges) {
@@ -106,7 +129,6 @@ public without sharing class ND_CaseTimelineController {
                     String oldV = String.valueOf(ftc.OldValue);
                     String newV = String.valueOf(ftc.NewValue);
 
-                    // --- CRITICAL FIX: Check if the Old/New Value ITSELF is the JSON blob ---
                     String potentialJson = (oldV != null && oldV.contains('{"fu"')) ? oldV : 
                                            (newV != null && newV.contains('{"fu"')) ? newV : null;
 
@@ -114,11 +136,10 @@ public without sharing class ND_CaseTimelineController {
                         String fix = parseFeedEventString(potentialJson, statusMap);
                         if (fix != null) {
                             changes.add(fix);
-                            continue; // Found JSON in column, use the parsed version
+                            continue; 
                         }
                     }
 
-                    // Standard Field Mapping
                     if (field == 'Status') {
                         if (statusMap.containsKey(oldV)) oldV = statusMap.get(oldV);
                         if (statusMap.containsKey(newV)) newV = statusMap.get(newV);
@@ -134,7 +155,6 @@ public without sharing class ND_CaseTimelineController {
                 }
                 item.body = String.join(changes, '<br/>');
             } 
-            // PRIORITY 3: Fallback
             else if (String.isNotBlank(cleanBody)) {
                 item.body = cleanBody;
             } else {
@@ -157,7 +177,7 @@ public without sharing class ND_CaseTimelineController {
             if (idxStart == -1 || idxEnd == -1 || idxEnd <= idxStart) return null;
 
             String jsonPart = cleanBody.substring(idxStart, idxEnd + 1);
-            jsonPart = jsonPart.replace('“', '"').replace('”', '"'); // Sanitize quotes
+            jsonPart = jsonPart.replace('“', '"').replace('”', '"'); 
 
             Map<String, Object> root = (Map<String, Object>) JSON.deserializeUntyped(jsonPart);
             
@@ -189,7 +209,6 @@ public without sharing class ND_CaseTimelineController {
 
     private static Map<String, String> getStatusMap() {
         Map<String, String> m = new Map<String, String>();
-        // RESTORED FULL MAPPINGS
         m.put('1', 'New');
         m.put('2', 'On Hold');
         m.put('3', 'Closed');
