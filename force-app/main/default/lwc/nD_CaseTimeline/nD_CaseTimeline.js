@@ -14,7 +14,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track error;
     
     _recordId;
-    _isTabVisible = false;
+    _isTabVisible = true;
     _visibilityObserver = null;
     
     // Make recordId reactive - triggers loadTimelineData when it changes
@@ -59,7 +59,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                     
                     // Refresh data when tab becomes visible (was hidden, now visible)
                     if (!wasVisible && this._isTabVisible && this.recordId) {
-                        console.log('Timeline tab became visible - refreshing data');
+                        console.log('📱 Timeline tab became visible - refreshing data');
                         this.loadTimelineData();
                     }
                 });
