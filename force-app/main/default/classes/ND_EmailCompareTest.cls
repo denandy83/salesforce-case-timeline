@@ -106,4 +106,59 @@ public class ND_EmailCompareTest {
         // Parser converts newlines to breaks for HTML view
         System.assert(result.newContent.contains('<br/>')); 
     }
+
+    @isTest
+    static void testEmptyInputs() {
+        Test.startTest();
+        ND_EmailCompare.ComparisonResult result1 = ND_EmailCompare.parse('', '', null, null);
+        ND_EmailCompare.ComparisonResult result2 = ND_EmailCompare.parse(null, null, null, null);
+        Test.stopTest();
+        
+        System.assertEquals(false, result1.hasHistory);
+        System.assertEquals(false, result2.hasHistory);
+    }
+    
+    @isTest
+    static void testForwardedMessage() {
+        String fullBody = '-----Forwarded Message-----<br>Original content here';
+        
+        Test.startTest();
+        ND_EmailCompare.ComparisonResult result = ND_EmailCompare.parse(fullBody, null, null, null);
+        Test.stopTest();
+        
+        System.assertEquals(true, result.hasHistory);
+    }
+    
+    @isTest
+    static void testStandaloneEmailAddress() {
+        String fullBody = 'Reply text<br><someone@example.com><br>Previous email';
+        
+        Test.startTest();
+        ND_EmailCompare.ComparisonResult result = ND_EmailCompare.parse(fullBody, null, null, null);
+        Test.stopTest();
+        
+        System.assertEquals(true, result.hasHistory);
+    }
+    
+    @isTest
+    static void testFrenchEmailHeader() {
+        String fullBody = 'Nouvelle réponse<br>De : John Doe<br>Envoyé : lundi 1 décembre<br>À : jane@example.com';
+        
+        Test.startTest();
+        ND_EmailCompare.ComparisonResult result = ND_EmailCompare.parse(fullBody, null, null, null);
+        Test.stopTest();
+        
+        System.assertEquals(true, result.hasHistory);
+    }
+    
+    @isTest
+    static void testHugeEmailSafetyLimit() {
+        String hugeText = 'A'.repeat(15000);
+        
+        Test.startTest();
+        ND_EmailCompare.ComparisonResult result = ND_EmailCompare.parse(hugeText, null, null, null);
+        Test.stopTest();
+        
+        System.assert(result.newContent != null);
+    }
 }
