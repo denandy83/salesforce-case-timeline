@@ -1,0 +1,178 @@
+/* VERSION: 2024-12-16 17:30 - CACHE BUST */
+
+/* Fix scrolling for long content */
+.slds-scrollable_y {
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+}
+
+/* Outgoing email badge styling */
+.outgoing-email-badge {
+    background-color: #FFF8D6 !important;
+    color: #333 !important;
+}
+
+/* Code block styling for chatter posts */
+.code-wrapper {
+    position: relative;
+    margin: 8px 0;
+}
+
+.copy-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 4px 8px;
+    background: #0176d3;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.8em;
+    z-index: 10;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.copy-btn:hover {
+    opacity: 1;
+}
+
+code.numbered-code {
+    display: block;
+    background-color: #f4f4f4;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    margin: 0;
+    font-family: 'Courier New', Courier, monospace;
+    overflow-x: auto;
+    font-size: 0.9em;
+    color: #333;
+}
+
+.code-line {
+    display: flex;
+    line-height: 1.5;
+}
+
+.line-num {
+    display: inline-block;
+    width: 40px;
+    padding-right: 10px;
+    text-align: right;
+    color: #999;
+    background-color: #e8e8e8;
+    border-right: 1px solid #ddd;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+.line-content {
+    padding-left: 10px;
+    flex: 1;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.slds-box[data-internal="true"] {
+    border-color: #e6d38e !important;
+    --slds-c-card-color-background: #fff7d6;
+}
+.internal-note {
+    background-color: #FFF8D6 !important; 
+    border-color: #e6d38e !important;
+}
+
+/* Force white background for external items */
+.slds-box[data-internal="false"] {
+    background-color: white !important;
+}
+
+/* Ensure images don't overflow */
+lightning-formatted-rich-text img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Images in email body */
+.email-body-main img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 10px 0;
+}
+
+/* List styling for chatter posts */
+.email-body-main ul,
+.email-history-content ul {
+    list-style-type: disc;
+    margin-left: 20px;
+    padding-left: 20px;
+}
+
+.email-body-main ol,
+.email-history-content ol {
+    list-style-type: decimal;
+    margin-left: 20px;
+    padding-left: 20px;
+}
+
+.email-body-main li,
+.email-history-content li {
+    margin-bottom: 5px;
+}
+
+/* History block styling */
+.email-history-content {
+    background-color: rgba(255, 255, 255, 0.6); 
+    border-radius: 4px;
+    border: 1px solid #dddbda;
+    opacity: 0.8; 
+    font-size: 0.9em;
+}
+
+/* Compact the Checkbox Group */
+.slds-checkbox_button-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* Add subtle hover effect to the container */
+.title-link-container:hover .title-link {
+    color: #0176d3;
+}
+
+/* Keep the strong tag visible */
+.title-link strong {
+    font-weight: bold;
+}
+
+/* ---------------------------------------------------------
+   NEW: Email Attachment Styling (Moves inline styles here)
+   --------------------------------------------------------- */
+.email-attachment-link {
+    display: inline-flex !important; /* Forces the box shape */
+    align-items: center;
+    margin: 4px 8px 4px 0;
+    padding: 6px 10px;
+    background-color: #f3f2f2;
+    border: 1px solid #c9c7c5;
+    border-radius: 3px;
+    text-decoration: none !important;
+    color: #0176d3 !important;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.email-attachment-link:hover {
+    background-color: #e5e5e5;
+    text-decoration: none;
+}
+
+.attachment-icon {
+    margin-right: 6px;
+    font-size: 1.1em;
+}
