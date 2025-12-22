@@ -1,6 +1,6 @@
-<!-- VERSION: 2024-12-16 16:50 -->
- <template>
+<template>
     <lightning-card variant="narrow">
+        
         <div class="slds-p-horizontal_medium slds-p-bottom_small slds-border_bottom">
             <div class="slds-grid slds-grid_vertical-align-center slds-wrap">
                 <div class="slds-col slds-grow">
@@ -25,15 +25,25 @@
                 </div>
             </div>
         </div>
+
         <div class="slds-p-around_medium slds-scrollable_y">
-            <!-- Loading Spinner -->
+            
+            <template if:true={isNewDataAvailable}>
+                <div class="slds-notify slds-notify_alert slds-alert_warning slds-m-bottom_medium" role="alert">
+                    <span class="slds-assistive-text">warning</span>
+                    <span class="slds-icon_container slds-icon-utility-warning slds-m-right_x-small">
+                        <lightning-icon icon-name="utility:warning" size="x-small" variant="inverse"></lightning-icon>
+                    </span>
+                    <h2>There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;">refresh</a> to see it.</h2>
+                </div>
+            </template>
+
             <template if:true={isLoading}>
                 <div class="slds-align_absolute-center" style="min-height: 200px;">
                     <lightning-spinner alternative-text="Loading timeline..." size="medium"></lightning-spinner>
                 </div>
             </template>
             
-            <!-- Error Message -->
             <template if:true={error}>
                 <div class="slds-text-color_error slds-text-align_center slds-p-around_medium">
                     <p>Error loading timeline data</p>
@@ -41,52 +51,49 @@
                 </div>
             </template>
             
-            <!-- Timeline Items -->
             <template if:false={isLoading}>
                 <template if:true={filteredData}>
                     <template for:each={filteredData} for:item="item">
-                    
-                    <div key={item.id} class={item.boxClass} style={item.rowStyle}>
-                        
-                        <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
-                            <div class="slds-truncate slds-text-heading_small title-link-container" title={item.title}>
-                                <a href="javascript:void(0);" onclick={handleTitleClick} data-record-id={item.id} class="title-link">
-                                    <strong>{item.title}</strong>
-                                </a>
+                        <div key={item.id} class={item.boxClass} style={item.rowStyle}>
+                            
+                            <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
+                                <div class="slds-truncate slds-text-heading_small title-link-container" title={item.title}>
+                                    <a href="javascript:void(0);" onclick={handleTitleClick} data-record-id={item.id} class="title-link">
+                                        <strong>{item.title}</strong>
+                                    </a>
+                                </div>
+                                <div class="slds-text-color_weak slds-text-body_small"><lightning-formatted-date-time value={item.createdDate} year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time></div>
                             </div>
-                            <div class="slds-text-color_weak slds-text-body_small"><lightning-formatted-date-time value={item.createdDate} year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time></div>
-                        </div>
-                        <div class="slds-text-body_small slds-m-bottom_small">
-                            <span class={item.emailBadgeClass} if:true={item.isEmailCategory}>Email</span>
-                            <span class="slds-badge" if:true={item.isPublicCategory}>Public</span>
-                            <span class="slds-badge slds-theme_warning" if:true={item.isInternalCategory}>Internal</span>
-                            <span class="slds-badge slds-theme_inverse" if:true={item.isSystemCategory}>System</span>
-                            <span class="slds-m-left_small">From: <b>{item.author}</b></span>
-                        </div>
-                        
-                        <!-- Changed to manual DOM rendering for images to work -->
-                        <div class="email-body-main" data-body-id={item.id} lwc:dom="manual"></div>
-                        
-                        <template if:true={item.hasHistory}>
-                            <div class="slds-m-top_small slds-text-align_left">
-                                <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id} class="slds-text-link_reset slds-text-color_brand">
-                                    <template if:false={item.historyExpanded}><b>Show More...</b></template>
-                                    <template if:true={item.historyExpanded}><b>Show Less</b></template>
-                                </a>
+                            <div class="slds-text-body_small slds-m-bottom_small">
+                                <span class={item.emailBadgeClass} if:true={item.isEmailCategory}>Email</span>
+                                <span class="slds-badge" if:true={item.isPublicCategory}>Public</span>
+                                <span class="slds-badge slds-theme_warning" if:true={item.isInternalCategory}>Internal</span>
+                                <span class="slds-badge slds-theme_inverse" if:true={item.isSystemCategory}>System</span>
+                                <span class="slds-m-left_small">From: <b>{item.author}</b></span>
                             </div>
-                            <template if:true={item.historyExpanded}>
-                                <!-- Changed to manual DOM rendering for images to work -->
-                                <div class="slds-m-top_x-small slds-p-around_small slds-theme_shade email-history-content" data-history-id={item.id} lwc:dom="manual"></div>
+                            
+                            <div class="email-body-main" data-body-id={item.id} lwc:dom="manual"></div>
+                            
+                            <template if:true={item.hasHistory}>
+                                <div class="slds-m-top_small slds-text-align_left">
+                                    <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id} class="slds-text-link_reset slds-text-color_brand">
+                                        <template if:false={item.historyExpanded}><b>Show More...</b></template>
+                                        <template if:true={item.historyExpanded}><b>Show Less</b></template>
+                                    </a>
+                                </div>
+                                <template if:true={item.historyExpanded}>
+                                    <div class="slds-m-top_x-small slds-p-around_small slds-theme_shade email-history-content" data-history-id={item.id} lwc:dom="manual"></div>
+                                </template>
                             </template>
-                        </template>
-                    </div>
+                        </div>
+                    </template>
                 </template>
             </template>
+            
             <template if:false={hasData}>
                 <template if:false={isLoading}>
                     <p class="slds-align_absolute-center">No items found.</p>
                 </template>
-            </template>
             </template>
         </div>
     </lightning-card>

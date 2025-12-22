@@ -356,7 +356,22 @@ public without sharing class ND_CaseTimelineController {
         }
         return result;
     }
-
+@AuraEnabled
+public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
+    if (caseId == null || lastCheckDate == null) return false;
+    
+    // Efficiently check if ANY new FeedItem exists after our last sync timestamp.
+    // We filter by specific types to avoid triggering on background system noise 
+    // (unless you want to add 'TrackedChange' to this list).
+    Integer count = [SELECT Count()
+                     FROM FeedItem 
+                     WHERE ParentId = :caseId 
+                     AND CreatedDate > :lastCheckDate
+                     AND Type IN ('TextPost', 'EmailMessageEvent', 'ContentPost', 'LinkPost')
+                     LIMIT 1];
+                     
+    return count > 0;
+}
     private static String processTrackedChanges(List<FeedTrackedChange> changes, Map<String, String> statusMap) {
         List<String> result = new List<String>();
         for (FeedTrackedChange ftc : changes) {

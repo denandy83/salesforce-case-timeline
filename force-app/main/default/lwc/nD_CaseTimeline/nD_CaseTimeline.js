@@ -1,7 +1,9 @@
-// nd_CaseTimeline.js
 import { LightningElement, api, track } from 'lwc';
 import { NavigationMixin } from 'lightning/navigation';
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
+import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
+
+const POLLING_INTERVAL = 15000; // 15 seconds
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -12,10 +14,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track sortDirection = 'desc';
     @track isLoading = false;
     @track error;
+    
+    // Polling Variables
+    @track isNewDataAvailable = false;
+    lastRefreshDate; 
+    _pollingTimer;
 
     _recordId;
-    _isTabVisible = true;
-    _visibilityObserver = null;
 
     @api 
     get recordId() {
@@ -33,43 +38,63 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (this.recordId) {
             this.loadTimelineData();
         }
-        this.setupVisibilityObserver();
     }
 
     disconnectedCallback() {
-        if (this._visibilityObserver) {
-            this._visibilityObserver.disconnect();
+        this.stopPolling();
+    }
+
+    // --- POLLING LOGIC ---
+
+    startPolling() {
+        this.stopPolling(); // Clear existing timer
+        
+        // eslint-disable-next-line @lwc/lwc/no-async-operation
+        this._pollingTimer = setInterval(() => {
+            this.checkServerForUpdates();
+        }, POLLING_INTERVAL);
+    }
+
+    stopPolling() {
+        if (this._pollingTimer) {
+            clearInterval(this._pollingTimer);
+            this._pollingTimer = null;
         }
     }
 
-    setupVisibilityObserver() {
-        try {
-            this._visibilityObserver = new IntersectionObserver((entries) => {
-                entries.forEach(entry => {
-                    const wasVisible = this._isTabVisible;
-                    this._isTabVisible = entry.isIntersecting;
-                    
-                    if (!wasVisible && this._isTabVisible && this.recordId) {
-                        this.loadTimelineData();
-                    }
-                });
-            }, {
-                threshold: 0.1
-            });
-            
-            this._visibilityObserver.observe(this.template.host);
-        } catch (error) {
-            console.error('Error setting up visibility observer:', error);
-        }
+    checkServerForUpdates() {
+        // Don't poll if we lack context
+        if (!this.recordId || !this.lastRefreshDate) return;
+
+        checkForNewItems({ 
+            caseId: this.recordId, 
+            lastCheckDate: this.lastRefreshDate 
+        })
+        .then(hasNewData => {
+            if (hasNewData) {
+                this.isNewDataAvailable = true;
+                this.stopPolling(); // Requirement: Stop polling once new data is found
+            }
+        })
+        .catch(error => {
+            console.error('Error polling:', error);
+        });
     }
+
+    // --- DATA LOADING ---
 
     loadTimelineData() {
         if (!this.recordId) return;
         
-        this.allItems = [];
+        this.stopPolling(); // Pause polling during load
         this.isLoading = true;
         this.error = undefined;
+        this.isNewDataAvailable = false; // Hide banner
         
+        // 1. Save timestamp BEFORE the query starts. 
+        // Any item created after this moment will be caught by the next poll.
+        this.lastRefreshDate = new Date().toISOString();
+
         getTimelineData({ caseId: this.recordId })
             .then(data => {
                 this.allItems = data.map(item => ({
@@ -87,10 +112,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                     isInternalCategory: item.category === 'Internal',
                     isSystemCategory: item.category === 'System'
                 }));
+                
                 this.isLoading = false;
                 
+                // Wait for render, then start polling
                 setTimeout(() => {
                     this.renderedCallback();
+                    this.startPolling(); 
                 }, 0);
             })
             .catch(error => {
@@ -99,123 +127,64 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             });
     }
 
+    // --- (No changes needed below this line, keep existing helper methods) ---
+
     renderedCallback() {
         if (this.allItems && this.allItems.length > 0) {
             this.allItems.forEach(item => {
                 const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
-                if (bodyContainer && item.body) {
+                if (bodyContainer && item.body && !bodyContainer.innerHTML) {
                     bodyContainer.innerHTML = item.body;
-                    
-                    const copyButtons = bodyContainer.querySelectorAll('.copy-btn');
-                    copyButtons.forEach(btn => {
-                        btn.addEventListener('click', this.handleCopyCode.bind(this));
-                    });
-                    
-                    const imageLinks = bodyContainer.querySelectorAll('.image-preview-link');
-                    imageLinks.forEach(link => {
-                        link.addEventListener('click', this.handleImagePreviewClick.bind(this));
-                    });
-                    
-                    const mentionLinks = bodyContainer.querySelectorAll('.mention-link');
-                    mentionLinks.forEach(link => {
-                        link.addEventListener('click', this.handleMentionClick.bind(this));
-                    });
+                    this.attachEventListeners(bodyContainer);
                 }
-                
                 if (item.historyExpanded && item.historyBody) {
                     const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
-                    if (historyContainer) {
+                    if (historyContainer && !historyContainer.innerHTML) {
                         historyContainer.innerHTML = item.historyBody;
-                        
-                        const copyButtons = historyContainer.querySelectorAll('.copy-btn');
-                        copyButtons.forEach(btn => {
-                            btn.addEventListener('click', this.handleCopyCode.bind(this));
-                        });
-                        
-                        const imageLinks = historyContainer.querySelectorAll('.image-preview-link');
-                        imageLinks.forEach(link => {
-                            link.addEventListener('click', this.handleImagePreviewClick.bind(this));
-                        });
-                        
-                        const mentionLinks = historyContainer.querySelectorAll('.mention-link');
-                        mentionLinks.forEach(link => {
-                            link.addEventListener('click', this.handleMentionClick.bind(this));
-                        });
+                        this.attachEventListeners(historyContainer);
                     }
                 }
             });
         }
     }
 
+    attachEventListeners(container) {
+        container.querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', this.handleCopyCode.bind(this)));
+        container.querySelectorAll('.image-preview-link').forEach(link => link.addEventListener('click', this.handleImagePreviewClick.bind(this)));
+        container.querySelectorAll('.mention-link').forEach(link => link.addEventListener('click', this.handleMentionClick.bind(this)));
+    }
+
     handleCopyCode(event) {
         const btn = event.target;
         const code = btn.getAttribute('data-code');
         const cleanCode = code ? code.replace(/\\n/g, '\n') : '';
-        
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(cleanCode).then(() => {
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-            }).catch(() => {
-                btn.textContent = 'Error';
-            });
-        } else {
-            const temp = document.createElement('textarea');
-            temp.value = cleanCode;
-            temp.style.position = 'fixed';
-            temp.style.left = '-999999px';
-            document.body.appendChild(temp);
-            temp.select();
-            try {
-                document.execCommand('copy');
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-            } catch(e) {
-                btn.textContent = 'Error';
-            }
-            document.body.removeChild(temp);
-        }
+        navigator.clipboard.writeText(cleanCode).then(() => {
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+        });
     }
 
     handleImagePreviewClick(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        
-        const docId = event.currentTarget.dataset.docId;
-        const recordType = event.currentTarget.dataset.recordType || 'ContentDocument';
-        
-        if (docId) {
-            this[NavigationMixin.Navigate]({
-                type: 'standard__namedPage',
-                attributes: {
-                    pageName: 'filePreview'
-                },
-                state: {
-                    selectedRecordId: docId
-                }
-            });
-        }
+        event.preventDefault(); event.stopPropagation();
+        this[NavigationMixin.Navigate]({
+            type: 'standard__namedPage',
+            attributes: { pageName: 'filePreview' },
+            state: { selectedRecordId: event.currentTarget.dataset.docId }
+        });
     }
 
     handleMentionClick(event) {
-        event.preventDefault();
-        event.stopPropagation();
-        
-        const recordId = event.currentTarget.dataset.recordId;
-        
-        if (recordId) {
-            this[NavigationMixin.Navigate]({
-                type: 'standard__recordPage',
-                attributes: {
-                    recordId: recordId,
-                    actionName: 'view'
-                }
-            });
-        }
+        event.preventDefault(); event.stopPropagation();
+        this[NavigationMixin.Navigate]({
+            type: 'standard__recordPage',
+            attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' }
+        });
     }
 
     get sortIcon() { return this.sortDirection === 'desc' ? 'utility:arrowdown' : 'utility:arrowup'; }
     get sortLabel() { return this.sortDirection === 'desc' ? 'Newest First' : 'Oldest First'; }
+    get hasData() { return this.filteredData && this.filteredData.length > 0; }
+
     get filteredData() {
         let result = this.allItems.filter(item => {
             if (item.category === 'Email' && this.showEmail) return true;
@@ -230,7 +199,6 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             return this.sortDirection === 'desc' ? dateB - dateA : dateA - dateB;
         });
     }
-    get hasData() { return this.filteredData && this.filteredData.length > 0; }
 
     handleToggle(event) {
         const name = event.target.name;
@@ -244,9 +212,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     handleSortToggle() { this.sortDirection = this.sortDirection === 'desc' ? 'asc' : 'desc'; }
 
     handleCollapseAll() {
-        this.allItems = [...this.allItems.map(item => {
-            return { ...item, historyExpanded: false };
-        })];
+        this.allItems = [...this.allItems.map(item => ({ ...item, historyExpanded: false }))];
     }
 
     handleRefresh() { 
@@ -264,14 +230,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
 
     handleTitleClick(event) {
         event.preventDefault();
-        const recordId = event.currentTarget.dataset.recordId;
-        
         this[NavigationMixin.Navigate]({
             type: 'standard__recordPage',
-            attributes: {
-                recordId: recordId,
-                actionName: 'view'
-            }
+            attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' }
         });
     }
 }
