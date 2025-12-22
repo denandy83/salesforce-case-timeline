@@ -31,38 +31,59 @@ public without sharing class ND_CaseTimelineController {
                                      AND Status != '5' 
                                      ORDER BY MessageDate DESC];
 
-        // 2. GET FEED ITEMS VIA CONNECTAPI
-        ConnectApi.FeedElementPage feedPage = null;
-        try {
-            feedPage = ConnectApi.ChatterFeeds.getFeedElementsFromFeed(
-                null, 
-                ConnectApi.FeedType.Record, 
-                caseId
-            );
-        } catch (Exception e) {
-            System.debug('ConnectAPI not available (likely test context): ' + e.getMessage());
-        }
-        
-        // 3. QUERY FEED ITEMS WITH ATTACHMENTS
+        // 2. QUERY FEED ITEMS FIRST (Moved up!)
+        // We do the SOQL query *before* the API call so we know WHICH IDs to fetch.
         List<FeedItem> feedItems = [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText,
                                          (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges),
                                          (SELECT Id, RecordId, Type FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
                                     FROM FeedItem 
                                     WHERE ParentId = :caseId 
+                                    AND Type != 'EmailMessageEvent' 
                                     ORDER BY CreatedDate DESC];
+        
+        /// 3. OPTIMIZED CONNECT API (Targeted Batch Fetch)
+        // Instead of fetching a generic page, we ask specifically for the items we just found.
+        Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
+        
+        // A. Collect IDs of posts that actually need rich text (Text/Content posts)
+        List<String> idsToEnrich = new List<String>();
+        for (FeedItem fi : feedItems) {
+            if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost') {
+                idsToEnrich.add(fi.Id);
+            }
+        }
 
-        return processItems(emails, feedItems, feedPage);
+        // B. Call the Batch API
+        if (!idsToEnrich.isEmpty()) {
+            try {
+                // Use 'null' for internal community
+                List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, idsToEnrich);
+                
+                for (ConnectApi.BatchResult result : results) {
+                    if (result.isSuccess()) {
+                        Object res = result.getResult();
+                        if (res instanceof ConnectApi.FeedItem) {
+                            ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
+                            connectMap.put(cfi.id, cfi);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                // Graceful fallback if ConnectAPI fails (e.g. in Unit Tests)
+                System.debug('ConnectAPI Batch Fetch failed: ' + e.getMessage());
+            }
+        }
+
+        // 4. PROCESS (Pass the map instead of the page)
+        return processItems(emails, feedItems, connectMap);
     }
 
-    @TestVisible 
-    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, ConnectApi.FeedElementPage feedPage) {
+   @TestVisible 
+    // 1. UPDATED SIGNATURE: Accepts 'connectMap' instead of 'feedPage'
+    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap) {
+    
         List<TimelineItem> combinedList = new List<TimelineItem>();
         Map<String, String> statusMap = getStatusMap();
-        
-        Map<Id, FeedItem> feedItemMap = new Map<Id, FeedItem>();
-        for (FeedItem fi : feedItems) {
-            feedItemMap.put(fi.Id, fi);
-        }
         
         String baseUrl = getBaseUrl();
         String fileBaseUrl = getFileBaseUrl();
@@ -104,7 +125,7 @@ public without sharing class ND_CaseTimelineController {
             }
         }
 
-        // --- PROCESS EMAILS ---
+        // --- PROCESS EMAILS (Unchanged) ---
         Set<Id> emailIds = new Set<Id>();
         for (EmailMessage em : emails) {
             emailIds.add(em.Id);
@@ -137,7 +158,6 @@ public without sharing class ND_CaseTimelineController {
                 em.HtmlBody, em.TextBody, null, null
             );
             
-            // Pass FALSE for linkification on emails (already HTML)
             item.body = cleanHtml(res.newContent, false);
             item.historyBody = cleanHtml(res.historyContent, false);
             item.hasHistory = res.hasHistory;
@@ -182,45 +202,53 @@ public without sharing class ND_CaseTimelineController {
             combinedList.add(item);
         }
 
-        // --- PROCESS FEED ITEMS (via ConnectAPI) ---
-        if (feedPage != null && feedPage.elements != null && !feedPage.elements.isEmpty()) {
-            for(ConnectApi.FeedElement element : feedPage.elements) {
-                if (!(element instanceof ConnectApi.FeedItem)) continue;
-                
-                ConnectApi.FeedItem connectFeedItem = (ConnectApi.FeedItem)element;
-                FeedItem soqlFeedItem = feedItemMap.get(connectFeedItem.id);
-                
-                if (soqlFeedItem == null) continue;
-                if (soqlFeedItem.Status == 'Draft') continue;
-                if (soqlFeedItem.Type == 'EmailMessageEvent') continue;
+        // --- PROCESS FEED ITEMS (Unified Logic) ---
+        // 2. We now loop through SOQL items and check the Map for rich data
+        for (FeedItem soqlFeedItem : feedItems) {
+            
+            // Common Filters
+            if (soqlFeedItem.Status == 'Draft') continue;
+            if (soqlFeedItem.Type == 'EmailMessageEvent') continue;
 
-                TimelineItem item = new TimelineItem();
-                item.id = connectFeedItem.id;
-                item.createdDate = connectFeedItem.createdDate;
-                item.author = (connectFeedItem.actor != null) ? connectFeedItem.actor.name : 'System';
-                item.hasHistory = false;
-                item.recordUrl = '/' + connectFeedItem.id;
+            TimelineItem item = new TimelineItem();
+            item.id = soqlFeedItem.Id;
+            item.createdDate = soqlFeedItem.CreatedDate;
+            item.hasHistory = false;
+            item.recordUrl = '/' + soqlFeedItem.Id;
 
-                Boolean isSystemType = (soqlFeedItem.Type == 'TrackedChange' || soqlFeedItem.Type == 'CreateRecordEvent' || soqlFeedItem.Type == 'ActivityEvent' || soqlFeedItem.Type == 'CaseCommentPost' || soqlFeedItem.Type == 'ChangeStatusPost' || (soqlFeedItem.CreatedBy != null && soqlFeedItem.CreatedBy.Name == 'Automated Process') || soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed');
+            // 3. TRY TO GET RICH DATA FROM MAP
+            ConnectApi.FeedItem connectFeedItem = (connectMap != null) ? connectMap.get(soqlFeedItem.Id) : null;
 
-                if (isSystemType) {
-                    item.category = 'System';
-                    item.isInternal = true; 
-                    if (soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed') {
-                        item.title = '⚙️ ' + soqlFeedItem.Title;
-                    } else {
-                        item.title = '⚙️ ' + formatSystemTitle(soqlFeedItem.Type);
-                    }
-                } else if (connectFeedItem.visibility == ConnectApi.FeedItemVisibilityType.AllUsers) {
-                    item.category = 'Public';
-                    item.isInternal = false; 
-                    item.title = '💬 Public Post';
+            // Determine Author
+            if (connectFeedItem != null && connectFeedItem.actor != null) {
+                item.author = connectFeedItem.actor.name;
+            } else {
+                item.author = (soqlFeedItem.CreatedBy != null) ? soqlFeedItem.CreatedBy.Name : 'System';
+            }
+
+            // Determine Category & Title (Your Logic)
+            Boolean isSystemType = (soqlFeedItem.Type == 'TrackedChange' || soqlFeedItem.Type == 'CreateRecordEvent' || soqlFeedItem.Type == 'ActivityEvent' || soqlFeedItem.Type == 'CaseCommentPost' || soqlFeedItem.Type == 'ChangeStatusPost' || (soqlFeedItem.CreatedBy != null && soqlFeedItem.CreatedBy.Name == 'Automated Process') || soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed');
+
+            if (isSystemType) {
+                item.category = 'System';
+                item.isInternal = true; 
+                if (soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed') {
+                    item.title = '⚙️ ' + soqlFeedItem.Title;
                 } else {
-                    item.category = 'Internal';
-                    item.isInternal = true; 
-                    item.title = '🔒 Internal Note';
+                    item.title = '⚙️ ' + formatSystemTitle(soqlFeedItem.Type);
                 }
-                
+            } else if (soqlFeedItem.Visibility == 'AllUsers') {
+                item.category = 'Public';
+                item.isInternal = false; 
+                item.title = '💬 Public Post';
+            } else {
+                item.category = 'Internal';
+                item.isInternal = true; 
+                item.title = '🔒 Internal Note';
+            }
+
+            // 4. RICH BODY PROCESSING (If map has data)
+            if (connectFeedItem != null) {
                 String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
                 Map<String, String> mentionReplacements = new Map<String, String>();
                 Map<String, String> mentionProtectionMap = new Map<String, String>();
@@ -231,11 +259,8 @@ public without sharing class ND_CaseTimelineController {
                         if (segment instanceof ConnectApi.MentionSegment) {
                             ConnectApi.MentionSegment m = (ConnectApi.MentionSegment)segment;
                             String mentionText = m.text; 
-                            
-                            // Create mention link with special class for JS interception
                             String mentionLink = '<a href="/' + m.record.id + '" class="mention-link" data-record-id="' + m.record.id + '" style="color:#0176d3; font-weight:bold; text-decoration:none;">' + m.text + '</a>';
                             
-                            // Protect mention links from further processing
                             String placeholder = '[[[[MENTION_' + mentionIndex + ']]]]';
                             mentionProtectionMap.put(placeholder, mentionLink);
                             mentionReplacements.put(mentionText, placeholder);
@@ -244,36 +269,15 @@ public without sharing class ND_CaseTimelineController {
                     }
                 }
                 
-                // Replace mentions with placeholders
                 for (String mentionText : mentionReplacements.keySet()) {
                     formattedBody = formattedBody.replace(mentionText, mentionReplacements.get(mentionText));
                 }
                 
+                // Process Body & Attachments (Unified logic)
                 String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                
-                List<String> attachmentImages = new List<String>();
-                if (soqlFeedItem.FeedAttachments != null && !soqlFeedItem.FeedAttachments.isEmpty()) {
-                    for (FeedAttachment fa : soqlFeedItem.FeedAttachments) {
-                        if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(fa.RecordId)) {
-                            String recordId = fa.RecordId;
-                            String versionId = documentIdToVersionId.get(recordId);
-                            if (recordId.startsWith('068')) versionId = recordId;
-                            
-                            if (String.isNotBlank(versionId)) {
-                                if (!cleanBody.contains(versionId)) {
-                                    String thumbUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + versionId + '&operationContext=CHATTER&contentId=' + recordId;
-                                    String fullUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/download/' + versionId;
-                                    attachmentImages.add('<a href="' + fullUrl + '" target="_blank" style="display:block; margin-top:10px; max-width:80%;"><img src="' + thumbUrl + '" alt="Attachment" style="max-width:100%; cursor:pointer;" /></a>');
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (!attachmentImages.isEmpty()) {
-                    cleanBody += '<br/>' + String.join(attachmentImages, '<br/>');
-                }
+                cleanBody = appendImages(cleanBody, soqlFeedItem, fileBaseUrl, documentIdToVersionId);
 
+                // Parsers
                 String parsedResult = null;
                 if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) {
                     parsedResult = parseFeedEventString(formattedBody, statusMap);
@@ -281,76 +285,23 @@ public without sharing class ND_CaseTimelineController {
 
                 if (parsedResult != null) {
                     item.body = parsedResult;
-                }
-                else if (soqlFeedItem.FeedTrackedChanges != null && !soqlFeedItem.FeedTrackedChanges.isEmpty() && String.isBlank(formattedBody)) {
-                    item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, statusMap);
-                } 
-                else if (String.isNotBlank(cleanBody)) {
-                    // TRUE = Linkify Chatter Posts
+                } else if (String.isNotBlank(cleanBody)) {
                     item.body = cleanHtml(cleanBody, true);
                     item.body = makeImagesClickable(item.body, versionIdToDocumentId);
                     
-                    // Restore protected mention links
+                    // Restore mentions
                     for (String placeholder : mentionProtectionMap.keySet()) {
                         item.body = item.body.replace(placeholder, mentionProtectionMap.get(placeholder));
                     }
                 } else {
                     item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
                 }
-                combinedList.add(item);
-            }
-        } 
-        else {
-            // FALLBACK: Process FeedItems from SOQL
-            for(FeedItem soqlFeedItem : feedItems) {
-                if (soqlFeedItem.Status == 'Draft') continue;
-                if (soqlFeedItem.Type == 'EmailMessageEvent') continue;
-
-                TimelineItem item = new TimelineItem();
-                item.id = soqlFeedItem.Id;
-                item.createdDate = soqlFeedItem.CreatedDate;
-                item.author = (soqlFeedItem.CreatedBy != null) ? soqlFeedItem.CreatedBy.Name : 'System';
-                item.hasHistory = false;
-                item.recordUrl = '/' + soqlFeedItem.Id;
-
-                Boolean isSystemType = (soqlFeedItem.Type == 'TrackedChange' || soqlFeedItem.Type == 'CreateRecordEvent' || soqlFeedItem.Type == 'ActivityEvent' || soqlFeedItem.Type == 'CaseCommentPost' || soqlFeedItem.Type == 'ChangeStatusPost' || (soqlFeedItem.CreatedBy != null && soqlFeedItem.CreatedBy.Name == 'Automated Process') || soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed');
-
-                if (isSystemType) {
-                    item.category = 'System';
-                    item.isInternal = true; 
-                    if (soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed') {
-                        item.title = '⚙️ ' + soqlFeedItem.Title;
-                    } else {
-                        item.title = '⚙️ ' + formatSystemTitle(soqlFeedItem.Type);
-                    }
-                } else if (soqlFeedItem.Visibility == 'AllUsers') {
-                    item.category = 'Public';
-                    item.isInternal = false; 
-                    item.title = '💬 Public Post';
-                } else {
-                    item.category = 'Internal';
-                    item.isInternal = true; 
-                    item.title = '🔒 Internal Note';
-                }
-                
+            } 
+            // 5. FALLBACK PROCESSING (If no map data)
+            else {
                 String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
                 String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                
-                if (soqlFeedItem.FeedAttachments != null && !soqlFeedItem.FeedAttachments.isEmpty()) {
-                    for (FeedAttachment fa : soqlFeedItem.FeedAttachments) {
-                        if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(fa.RecordId)) {
-                            String contentDocId = fa.RecordId;
-                            String versionId = documentIdToVersionId.get(contentDocId);
-                            if (String.isNotBlank(versionId)) {
-                                if (!cleanBody.contains(versionId)) {
-                                    String imgUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + versionId + '&operationContext=CHATTER&contentId=' + contentDocId;
-                                    String separator = String.isNotBlank(cleanBody) ? '<br/>' : '';
-                                    cleanBody += separator + '<img src="' + imgUrl + '" alt="' + (soqlFeedItem.Title != null ? soqlFeedItem.Title : 'Image') + '" style="max-width:80%; margin-top:10px;" />';
-                                }
-                            }
-                        }
-                    }
-                }
+                cleanBody = appendImages(cleanBody, soqlFeedItem, fileBaseUrl, documentIdToVersionId);
 
                 String parsedResult = null;
                 if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) {
@@ -364,16 +315,46 @@ public without sharing class ND_CaseTimelineController {
                     item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, statusMap);
                 } 
                 else if (String.isNotBlank(cleanBody)) {
-                    item.body = cleanHtml(cleanBody, true);
+                    item.body = cleanHtml(cleanBody, true); // true = Linkify
                     item.body = makeImagesClickable(item.body, versionIdToDocumentId);
                 } else {
                     item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
                 }
-                combinedList.add(item);
             }
+
+            combinedList.add(item);
         }
+
         combinedList.sort();
         return combinedList;
+    }
+
+    // --- HELPER to reduce code duplication in the loop above ---
+    private static String appendImages(String body, FeedItem soqlFeedItem, String fileBaseUrl, Map<String, String> documentIdToVersionId) {
+        String result = body;
+        List<String> attachmentImages = new List<String>();
+        if (soqlFeedItem.FeedAttachments != null && !soqlFeedItem.FeedAttachments.isEmpty()) {
+            for (FeedAttachment fa : soqlFeedItem.FeedAttachments) {
+                if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(fa.RecordId)) {
+                    String recordId = fa.RecordId;
+                    String versionId = documentIdToVersionId.get(recordId);
+                    if (recordId.startsWith('068')) versionId = recordId;
+                    
+                    if (String.isNotBlank(versionId)) {
+                        if (String.isBlank(result) || !result.contains(versionId)) {
+                            String thumbUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + versionId + '&operationContext=CHATTER&contentId=' + recordId;
+                            String fullUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/download/' + versionId;
+                            attachmentImages.add('<a href="' + fullUrl + '" target="_blank" style="display:block; margin-top:10px; max-width:80%;"><img src="' + thumbUrl + '" alt="Attachment" style="max-width:100%; cursor:pointer;" /></a>');
+                        }
+                    }
+                }
+            }
+        }
+        if (!attachmentImages.isEmpty()) {
+            String prefix = String.isNotBlank(result) ? '<br/>' : '';
+            result += prefix + String.join(attachmentImages, '<br/>');
+        }
+        return result;
     }
 
     private static String processTrackedChanges(List<FeedTrackedChange> changes, Map<String, String> statusMap) {
