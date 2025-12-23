@@ -21,44 +21,136 @@ public without sharing class ND_CaseTimelineController {
             return 0;
         }
     }
+// --- CONFIGURATION WRAPPER ---
+    public class TimelineConfig {
+        @AuraEnabled public Integer batchSize { get; set; }
+        @AuraEnabled public Boolean debugMode { get; set; }
+        @AuraEnabled public Boolean showToast { get; set; }
+        @AuraEnabled public Integer pollingInterval { get; set; }
+        @AuraEnabled public Boolean defaultEmail { get; set; }
+        @AuraEnabled public Boolean defaultInternal { get; set; }
+        @AuraEnabled public Boolean defaultPublic { get; set; }
+        @AuraEnabled public Boolean defaultSystem { get; set; }
+        
+        // Constructor with Default Fallbacks
+        public TimelineConfig() {
+            this.batchSize = 10;
+            this.debugMode = false;
+            this.showToast = false;
+            this.pollingInterval = 15000;
+            this.defaultEmail = true;
+            this.defaultInternal = true;
+            this.defaultPublic = true;
+            this.defaultSystem = false;
+        }
+    }
 
+    @AuraEnabled(cacheable=true)
+    public static TimelineConfig getTimelineConfig() {
+        TimelineConfig configWrapper = new TimelineConfig();
+        
+        try {
+            Custom_Configuration__c dbConfig = [
+                SELECT Batch_Size__c, Debug_Mode__c, Loading_Times_Toast__c, 
+                       Polling_Interval__c, Show_Email_Default__c, 
+                       Show_Internal_Default__c, Show_Public_Default__c, 
+                       Show_Sytem_Default__c 
+                FROM Custom_Configuration__c 
+                WHERE Active__c = true 
+                LIMIT 1
+            ];
+            
+            if (dbConfig != null) {
+                if (dbConfig.Batch_Size__c != null) configWrapper.batchSize = (Integer)dbConfig.Batch_Size__c;
+                configWrapper.debugMode = dbConfig.Debug_Mode__c;
+                configWrapper.showToast = dbConfig.Loading_Times_Toast__c;
+                // Convert seconds to milliseconds for JS setInterval
+                if (dbConfig.Polling_Interval__c != null) configWrapper.pollingInterval = (Integer)dbConfig.Polling_Interval__c * 1000; 
+                configWrapper.defaultEmail = dbConfig.Show_Email_Default__c;
+                configWrapper.defaultInternal = dbConfig.Show_Internal_Default__c;
+                configWrapper.defaultPublic = dbConfig.Show_Public_Default__c;
+                configWrapper.defaultSystem = dbConfig.Show_Sytem_Default__c;
+            }
+        } catch (Exception e) {
+            System.debug('No active configuration found, using defaults.');
+        }
+        
+        return configWrapper;
+    }
     @AuraEnabled
-    public static List<TimelineItem> getTimelineData(Id caseId) {
-        // 1. QUERY EMAIL MESSAGES
-        List<EmailMessage> emails = [SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, CreatedBy.Name, Incoming 
-                                     FROM EmailMessage 
-                                     WHERE ParentId = :caseId 
-                                     AND Status != '5' 
-                                     ORDER BY MessageDate DESC];
+    public static List<TimelineItem> getTimelineData(Id caseId, DateTime beforeDate, Integer limitSize) {
+        if (limitSize == null || limitSize < 1) limitSize = 10;
+        
+        // If no date provided (initial load), use slightly in the future to catch everything
+        if (beforeDate == null) beforeDate = DateTime.now().addSeconds(1);
 
-        // 2. QUERY FEED ITEMS FIRST (Moved up!)
-        // We do the SOQL query *before* the API call so we know WHICH IDs to fetch.
-        List<FeedItem> feedItems = [SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText,
-                                         (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges),
-                                         (SELECT Id, RecordId, Type FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
-                                    FROM FeedItem 
-                                    WHERE ParentId = :caseId 
-                                    AND Type != 'EmailMessageEvent' 
-                                    ORDER BY CreatedDate DESC];
+        // 1. Fetch Candidates (Max limitSize from each stream)
+        // We fetch 'limitSize' from BOTH to ensure we have enough candidates to fill the page
+        // even if one stream is empty.
         
-        /// 3. OPTIMIZED CONNECT API (Targeted Batch Fetch)
-        // Instead of fetching a generic page, we ask specifically for the items we just found.
+        List<EmailMessage> emailCandidates = [
+            SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, CreatedBy.Name, Incoming 
+            FROM EmailMessage 
+            WHERE ParentId = :caseId 
+            AND Status != '5' 
+            AND MessageDate < :beforeDate
+            ORDER BY MessageDate DESC
+            LIMIT :limitSize
+        ];
+
+        List<FeedItem> feedCandidates = [
+            SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText,
+            (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges),
+            (SELECT Id, RecordId, Type FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
+            FROM FeedItem 
+            WHERE ParentId = :caseId 
+            AND Type != 'EmailMessageEvent'
+            AND CreatedDate < :beforeDate 
+            ORDER BY CreatedDate DESC
+            LIMIT :limitSize
+        ];
+
+        // 2. Mix and Sort in Memory to find the true "Top N"
+        List<SObject> combinedRaw = new List<SObject>();
+        combinedRaw.addAll((List<SObject>)emailCandidates);
+        combinedRaw.addAll((List<SObject>)feedCandidates);
+
+        // Sort using a custom comparator wrapper to handle different Date fields
+        List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
+        for(SObject obj : combinedRaw) {
+            wrappers.add(new RawItemWrapper(obj));
+        }
+        wrappers.sort();
+
+        // 3. Keep only the top 'limitSize' items
+        List<EmailMessage> finalEmails = new List<EmailMessage>();
+        List<FeedItem> finalFeeds = new List<FeedItem>();
+
+        Integer count = 0;
+        for(RawItemWrapper w : wrappers) {
+            if (count >= limitSize) break;
+            
+            if (w.obj instanceof EmailMessage) {
+                finalEmails.add((EmailMessage)w.obj);
+            } else {
+                finalFeeds.add((FeedItem)w.obj);
+            }
+            count++;
+        }
+
+        // 4. PREPARE CONNECT API (Only for the final filtered FeedItems)
         Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
-        
-        // A. Collect IDs of posts that actually need rich text (Text/Content posts)
         List<String> idsToEnrich = new List<String>();
-        for (FeedItem fi : feedItems) {
+        
+        for (FeedItem fi : finalFeeds) {
             if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost') {
                 idsToEnrich.add(fi.Id);
             }
         }
 
-        // B. Call the Batch API
         if (!idsToEnrich.isEmpty()) {
             try {
-                // Use 'null' for internal community
                 List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, idsToEnrich);
-                
                 for (ConnectApi.BatchResult result : results) {
                     if (result.isSuccess()) {
                         Object res = result.getResult();
@@ -68,14 +160,33 @@ public without sharing class ND_CaseTimelineController {
                         }
                     }
                 }
-            } catch (Exception e) {
-                // Graceful fallback if ConnectAPI fails (e.g. in Unit Tests)
-                System.debug('ConnectAPI Batch Fetch failed: ' + e.getMessage());
-            }
+            } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
         }
 
-        // 4. PROCESS (Pass the map instead of the page)
-        return processItems(emails, feedItems, connectMap);
+        // 5. PROCESS (Reuse your existing processItems logic)
+        return processItems(finalEmails, finalFeeds, connectMap);
+    }
+
+    // --- Helper Wrapper for sorting mixed SObjects by Date ---
+    public class RawItemWrapper implements Comparable {
+        public SObject obj;
+        public DateTime sortDate;
+        
+        public RawItemWrapper(SObject o) {
+            this.obj = o;
+            if (o instanceof EmailMessage) {
+                this.sortDate = ((EmailMessage)o).MessageDate;
+            } else {
+                this.sortDate = ((FeedItem)o).CreatedDate;
+            }
+        }
+        
+        public Integer compareTo(Object compareTo) {
+            RawItemWrapper other = (RawItemWrapper) compareTo;
+            if (this.sortDate < other.sortDate) return 1; // Descending
+            if (this.sortDate > other.sortDate) return -1;
+            return 0;
+        }
     }
 
    @TestVisible 
@@ -741,21 +852,23 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
             String codeContent = m.group(1);
             String fullMatch = m.group(0);
             
-            String escapedContent = codeContent.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;');
-            escapedContent = escapedContent.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n');
+            // NO ESCAPING NEEDED for the Raw Content in textarea.
+            // We pass codeContent exactly as found.
             
             String[] lines = codeContent.split('\n');
             String numberedCode = '';
             for (Integer i = 0; i < lines.size(); i++) {
-                String safeLine = lines[i].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;');
-                numberedCode += '<div class="code-line"><span class="line-num">' + (i + 1) + '</span><span class="line-content">' + safeLine + '</span></div>';
+                // Display lines remain raw (trusting Salesforce storage)
+                numberedCode += '<div class="code-line"><span class="line-num">' + (i + 1) + '</span><span class="line-content">' + lines[i] + '</span></div>';
             }
             
             String codeId = 'code-block-' + blockId;
             blockId++;
             
+            // Build the Block with hidden textarea
             String replacement = '<div class="code-wrapper">' + 
-                '<button class="copy-btn" data-code="' + escapedContent + '">Copy</button>' + 
+                '<textarea class="raw-code-storage" style="display:none;">' + codeContent + '</textarea>' +
+                '<button class="copy-btn">Copy</button>' + 
                 '<code id="' + codeId + '" class="numbered-code">' + numberedCode + '</code>' + 
                 '</div>';
             

@@ -7,10 +7,10 @@
                     <div class="slds-form-element">
                         <div class="slds-form-element__control">
                             <div class="slds-checkbox_button-group">
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Emails" name="email" checked={showEmail} onchange={handleToggle}></lightning-input></span>
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Public" name="public" checked={showPublic} onchange={handleToggle}></lightning-input></span>
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Internal" name="internal" checked={showInternal} onchange={handleToggle}></lightning-input></span>
-                                <span><lightning-input type="checkbox" label="System" name="system" checked={showSystem} onchange={handleToggle}></lightning-input></span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label={emailLabel} name="email" checked={showEmail} onchange={handleToggle}></lightning-input></span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label={publicLabel} name="public" checked={showPublic} onchange={handleToggle}></lightning-input></span>
+                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label={internalLabel} name="internal" checked={showInternal} onchange={handleToggle}></lightning-input></span>
+                                <span><lightning-input type="checkbox" label={systemLabel} name="system" checked={showSystem} onchange={handleToggle}></lightning-input></span>
                             </div>
                         </div>
                     </div>
@@ -26,18 +26,18 @@
             </div>
         </div>
 
+        <template if:true={isNewDataAvailable}>
+            <div class="slds-notify slds-notify_alert slds-alert_warning" role="alert" style="border-radius:0;">
+                <span class="slds-assistive-text">warning</span>
+                <span class="slds-icon_container slds-icon-utility-warning slds-m-right_x-small">
+                    <lightning-icon icon-name="utility:warning" size="x-small" variant="inverse"></lightning-icon>
+                </span>
+                <h2>There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;">refresh</a> to see it.</h2>
+            </div>
+        </template>
+
         <div class="slds-p-around_medium slds-scrollable_y">
             
-            <template if:true={isNewDataAvailable}>
-                <div class="slds-notify slds-notify_alert slds-alert_warning slds-m-bottom_medium" role="alert">
-                    <span class="slds-assistive-text">warning</span>
-                    <span class="slds-icon_container slds-icon-utility-warning slds-m-right_x-small">
-                        <lightning-icon icon-name="utility:warning" size="x-small" variant="inverse"></lightning-icon>
-                    </span>
-                    <h2>There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;">refresh</a> to see it.</h2>
-                </div>
-            </template>
-
             <template if:true={isLoading}>
                 <div class="slds-align_absolute-center" style="min-height: 200px;">
                     <lightning-spinner alternative-text="Loading timeline..." size="medium"></lightning-spinner>
@@ -55,8 +55,7 @@
                 <template if:true={filteredData}>
                     <template for:each={filteredData} for:item="item">
                         <div key={item.id} class={item.boxClass} style={item.rowStyle}>
-                            
-                            <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
+                             <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
                                 <div class="slds-truncate slds-text-heading_small title-link-container" title={item.title}>
                                     <a href="javascript:void(0);" onclick={handleTitleClick} data-record-id={item.id} class="title-link">
                                         <strong>{item.title}</strong>
@@ -88,10 +87,19 @@
                         </div>
                     </template>
                 </template>
-            </template>
-            
-            <template if:false={hasData}>
-                <template if:false={isLoading}>
+                
+                <template if:true={hasMoreItems}>
+                    <div class="slds-m-top_medium slds-align_absolute-center slds-m-bottom_large" style="position:relative; min-height:40px;">
+                        <template if:true={isLoadingMore}>
+                             <lightning-spinner alternative-text="Loading more..." size="small"></lightning-spinner>
+                        </template>
+                        <template if:false={isLoadingMore}>
+                            <lightning-button label="Load More" title="Load more items" onclick={handleLoadMore} variant="brand-outline"></lightning-button>
+                        </template>
+                    </div>
+                </template>
+
+                <template if:false={hasData}>
                     <p class="slds-align_absolute-center">No items found.</p>
                 </template>
             </template>
