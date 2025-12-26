@@ -34,6 +34,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     debugMode = false;
     showLoadTimeToast = false;
     configLoaded = false;
+    visibleCharLimit = 1950; 
+    expandByDefault = false;
+
 
     @api 
     get recordId() { return this._recordId; }
@@ -61,7 +64,11 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.showPublic = config.defaultPublic;
             this.showInternal = config.defaultInternal;
             this.showSystem = config.defaultSystem;
-            
+            if (config.visibleCharLimit !== undefined && config.visibleCharLimit !== null) {
+                this.visibleCharLimit = config.visibleCharLimit;
+            }
+            this.expandByDefault = config.expandByDefault;
+            this.areAllExpanded = config.expandByDefault;
             this.configLoaded = true;
             this.initialLoad();
         } catch (error) {
@@ -182,7 +189,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
 
         return {
             ...processedItem,
-            isExpanded: false, // Default collapsed
+            isExpanded: this.expandByDefault,
             historyExpanded: false, // Default history hidden
             previewText: previewText,
             rowStyle: '',
@@ -204,7 +211,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     // --- PARSING LOGIC ---
     parseEmailContent(fullBody) {
         if (!fullBody) return { newContent: '', historyContent: '', hasHistory: false };
-        const MAX_VISIBLE_CHARS = 1950;
+
+        // NEW: If 0, use total length (disable truncation). Otherwise use config.
+        const maxChars = (this.visibleCharLimit === 0) ? fullBody.length + 100 : this.visibleCharLimit;
 
         const xmlTagRegex = new RegExp('<\\?xml[\\s\\S]*?\\?>', 'gi');
         let cleaned = fullBody
@@ -223,7 +232,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             const contentBeforeSplit = cleaned.substring(0, htmlSplitIndex);
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = contentBeforeSplit;
-            if (tempDiv.innerText.length <= MAX_VISIBLE_CHARS) {
+            // Check against dynamic maxChars
+            if (tempDiv.innerText.length <= maxChars) {
                 useNaturalSplit = true;
             }
         }
@@ -237,7 +247,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                 hasHistory: true 
             };
         } else {
-            return this.truncateHtml(cleaned, '', MAX_VISIBLE_CHARS);
+            // Pass dynamic maxChars to truncateHtml
+            return this.truncateHtml(cleaned, '', maxChars);
         }
     }
 

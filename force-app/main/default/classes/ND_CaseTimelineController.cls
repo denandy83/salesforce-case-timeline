@@ -22,6 +22,7 @@ public without sharing class ND_CaseTimelineController {
         }
     }
 
+    // --- CONFIGURATION WRAPPER ---
     public class TimelineConfig {
         @AuraEnabled public Integer batchSize { get; set; }
         @AuraEnabled public Boolean debugMode { get; set; }
@@ -31,6 +32,8 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public Boolean defaultInternal { get; set; }
         @AuraEnabled public Boolean defaultPublic { get; set; }
         @AuraEnabled public Boolean defaultSystem { get; set; }
+        @AuraEnabled public Integer visibleCharLimit { get; set; } 
+        @AuraEnabled public Boolean expandByDefault { get; set; }
         
         public TimelineConfig() {
             this.batchSize = 10;
@@ -41,18 +44,22 @@ public without sharing class ND_CaseTimelineController {
             this.defaultInternal = true;
             this.defaultPublic = true;
             this.defaultSystem = false;
+            this.visibleCharLimit = 1950; 
+            this.expandByDefault = false;
         }
     }
 
     @AuraEnabled(cacheable=true)
     public static TimelineConfig getTimelineConfig() {
         TimelineConfig configWrapper = new TimelineConfig();
+        
         try {
             Custom_Configuration__c dbConfig = [
                 SELECT Batch_Size__c, Debug_Mode__c, Loading_Times_Toast__c, 
                        Polling_Interval__c, Show_Email_Default__c, 
                        Show_Internal_Default__c, Show_Public_Default__c, 
-                       Show_Sytem_Default__c 
+                       Show_Sytem_Default__c, Visible_Character_Limit__c,
+                       Expand_by_default__c
                 FROM Custom_Configuration__c 
                 WHERE Active__c = true 
                 LIMIT 1
@@ -67,10 +74,15 @@ public without sharing class ND_CaseTimelineController {
                 configWrapper.defaultInternal = dbConfig.Show_Internal_Default__c;
                 configWrapper.defaultPublic = dbConfig.Show_Public_Default__c;
                 configWrapper.defaultSystem = dbConfig.Show_Sytem_Default__c;
+                if (dbConfig.Visible_Character_Limit__c != null) {
+                    configWrapper.visibleCharLimit = (Integer)dbConfig.Visible_Character_Limit__c;
+                }
+                configWrapper.expandByDefault = dbConfig.Expand_by_default__c;
             }
         } catch (Exception e) {
             System.debug('No active configuration found, using defaults.');
         }
+        
         return configWrapper;
     }
 
