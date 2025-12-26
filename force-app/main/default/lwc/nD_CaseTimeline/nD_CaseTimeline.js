@@ -20,6 +20,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     
     @track isNewDataAvailable = false;
     @track hasMoreItems = true; 
+    @track isSettingsOpen = false;
+    configId;
     
     // Global toggle state (false = all collapsed initially)
     @track areAllExpanded = false;
@@ -55,6 +57,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         try {
             this.isLoading = true;
             const config = await getTimelineConfig();
+            this.configId = config.configId;
             this.batchSize = config.batchSize || 10;
             this.pollingInterval = config.pollingInterval || 15000;
             this.debugMode = config.debugMode;
@@ -69,6 +72,17 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             }
             this.expandByDefault = config.expandByDefault;
             this.areAllExpanded = config.expandByDefault;
+            
+            if (this.showLoadTimeToast) {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Configuration Loaded',
+                        message: 'Active Config: ' + config.configName,
+                        variant: 'info',
+                        mode: 'dismissible'
+                    })
+                );
+            }
             this.configLoaded = true;
             this.initialLoad();
         } catch (error) {
@@ -593,5 +607,30 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             type: 'standard__recordPage', 
             attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' } 
         });
+    }
+    handleSettingsClick() {
+        this.isSettingsOpen = true;
+    }
+
+    handleModalClose() {
+        this.isSettingsOpen = false;
+    }
+
+    handleSettingsSuccess() {
+        this.isSettingsOpen = false;
+        
+        // Show success toast
+        this.dispatchEvent(
+            new ShowToastEvent({
+                title: 'Success',
+                message: 'Configuration saved. Reloading timeline...',
+                variant: 'success'
+            })
+        );
+
+        // Reload the component to apply new settings
+        this.isLoading = true;
+        this.configLoaded = false; // Force full config re-fetch
+        this.init();
     }
 }

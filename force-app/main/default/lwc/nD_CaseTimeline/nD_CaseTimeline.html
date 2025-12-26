@@ -22,6 +22,7 @@
                         <lightning-button-icon icon-name={sortIcon} alternative-text="Sort" variant="border-filled" onclick={handleSortToggle}></lightning-button-icon>
                         <lightning-button-icon icon-name={expandCollapseIcon} alternative-text={expandCollapseLabel} variant="border-filled" class="slds-m-left_x-small" onclick={handleExpandCollapseAll}></lightning-button-icon>
                         <lightning-button-icon icon-name="utility:refresh" alternative-text="Refresh Feed" variant="border-filled" class="slds-m-left_x-small" onclick={handleRefresh}></lightning-button-icon>
+                        <lightning-button-icon icon-name="utility:settings" alternative-text="Settings" variant="border-filled" class="slds-m-left_x-small" onclick={handleSettingsClick}></lightning-button-icon>
                     </div>
                 </div>
             </div>
@@ -149,4 +150,47 @@
             </template>
         </div>
     </lightning-card>
+    <template if:true={isSettingsOpen}>
+        <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+            <div class="slds-modal__container">
+                <header class="slds-modal__header">
+                    <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse" title="Close" onclick={handleModalClose}>
+                        <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse" size="small"></lightning-icon>
+                        <span class="slds-assistive-text">Close</span>
+                    </button>
+                    <h2 class="slds-text-heading_medium slds-hyphenate">Timeline Configuration</h2>
+                </header>
+                
+                <div class="slds-modal__content slds-p-around_medium">
+                    <lightning-record-edit-form object-api-name="Custom_Configuration__c" record-id={configId} onsuccess={handleSettingsSuccess}>
+                        <lightning-messages></lightning-messages>
+                        
+                        <div class="slds-grid slds-gutters">
+                            <div class="slds-col slds-size_1-of-2">
+                                <h3 class="slds-text-title_caps slds-m-bottom_small">Display Defaults</h3>
+                                <lightning-input-field field-name="Show_Email_Default__c"></lightning-input-field>
+                                <lightning-input-field field-name="Show_Internal_Default__c"></lightning-input-field>
+                                <lightning-input-field field-name="Show_Public_Default__c"></lightning-input-field>
+                                <lightning-input-field field-name="Show_Sytem_Default__c"></lightning-input-field>
+                                <lightning-input-field field-name="Expand_by_default__c"></lightning-input-field>
+                            </div>
+                            <div class="slds-col slds-size_1-of-2">
+                                <h3 class="slds-text-title_caps slds-m-bottom_small">Performance & Limits</h3>
+                                <lightning-input-field field-name="Batch_Size__c"></lightning-input-field>
+                                <lightning-input-field field-name="Visible_Character_Limit__c"></lightning-input-field>
+                                <lightning-input-field field-name="Polling_Interval__c"></lightning-input-field>
+                               
+                            </div>
+                        </div>
+
+                        <div class="slds-m-top_medium slds-text-align_right">
+                            <lightning-button class="slds-m-right_small" variant="neutral" label="Cancel" onclick={handleModalClose}></lightning-button>
+                            <lightning-button variant="brand" type="submit" label="Save Settings"></lightning-button>
+                        </div>
+                    </lightning-record-edit-form>
+                </div>
+            </div>
+        </section>
+        <div class="slds-backdrop slds-backdrop_open"></div>
+    </template>
 </template>
