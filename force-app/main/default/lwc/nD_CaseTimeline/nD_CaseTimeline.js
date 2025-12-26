@@ -1,14 +1,13 @@
 import { LightningElement, api, track } from 'lwc';
 import { NavigationMixin } from 'lightning/navigation';
-import { ShowToastEvent } from 'lightning/platformShowToastEvent'; //
+import { ShowToastEvent } from 'lightning/platformShowToastEvent'; 
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
 import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
-import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig'; // Import new method
+import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
     
-    // Default values (will be overwritten by config)
     @track showEmail = true;
     @track showPublic = true;
     @track showInternal = true;
@@ -22,75 +21,59 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track isNewDataAvailable = false;
     @track hasMoreItems = true; 
     
+    // Global toggle state (false = all collapsed initially)
+    @track areAllExpanded = false;
+
     lastRefreshDate; 
     _pollingTimer;
     _recordId;
     
-    // --- DYNAMIC CONFIG VARIABLES ---
-    batchSize = 10;         // Fallback default
-    pollingInterval = 15000; // Fallback default
+    // Config
+    batchSize = 10;
+    pollingInterval = 15000;
     debugMode = false;
     showLoadTimeToast = false;
-    configLoaded = false;    // Guard to ensure we don't fetch data before config
+    configLoaded = false;
 
     @api 
     get recordId() { return this._recordId; }
     set recordId(value) {
         this._recordId = value;
-        // Only trigger load if we have the ID. 
-        // If config isn't loaded yet, connectedCallback will handle it.
-        if (value && this.configLoaded) { 
-            this.initialLoad(); 
-        }
+        if (value && this.configLoaded) this.initialLoad(); 
     }
 
     connectedCallback() {
-        if (this.recordId) { 
-            this.init(); // New init orchestration
-        }
+        if (this.recordId) this.init(); 
     }
 
     disconnectedCallback() { this.stopPolling(); }
 
-    // --- INITIALIZATION ---
-    
     async init() {
         try {
             this.isLoading = true;
-            // 1. Fetch Configuration
             const config = await getTimelineConfig();
-            
-            // 2. Apply Configuration
             this.batchSize = config.batchSize || 10;
-            this.pollingInterval = config.pollingInterval || 15000; // Apex handles the *1000 conversion if you did it there, or do it here.
+            this.pollingInterval = config.pollingInterval || 15000;
             this.debugMode = config.debugMode;
             this.showLoadTimeToast = config.showToast;
             
-            // Apply checkbox defaults
             this.showEmail = config.defaultEmail;
             this.showPublic = config.defaultPublic;
             this.showInternal = config.defaultInternal;
             this.showSystem = config.defaultSystem;
             
-            this.logDebug('Configuration Loaded', config);
             this.configLoaded = true;
-            
-            // 3. Start Data Load
             this.initialLoad();
-            
         } catch (error) {
-            console.error('Error loading config', error);
-            // Fallback: load anyway with defaults
+            console.error(error);
             this.configLoaded = true;
             this.initialLoad();
         }
     }
 
     // --- POLLING ---
-    
     startPolling() {
         this.stopPolling(); 
-        this.logDebug(`Starting Polling (Interval: ${this.pollingInterval}ms)`);
         // eslint-disable-next-line @lwc/lwc/no-async-operation
         this._pollingTimer = setInterval(() => { this.checkServerForUpdates(); }, this.pollingInterval);
     }
@@ -104,176 +87,381 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         checkForNewItems({ caseId: this.recordId, lastCheckDate: this.lastRefreshDate })
         .then(hasNewData => {
             if (hasNewData) {
-                this.logDebug('New data detected via polling');
                 this.isNewDataAvailable = true;
                 this.stopPolling();
             }
-        })
-        .catch(console.error);
+        }).catch(console.error);
     }
 
     // --- DATA LOADING ---
-
     initialLoad() {
         if (!this.recordId || !this.configLoaded) return;
-        
         this.stopPolling();
         this.isLoading = true;
         this.allItems = []; 
         this.hasMoreItems = true;
         this.error = undefined;
         this.isNewDataAvailable = false;
-        
         this.lastRefreshDate = new Date().toISOString();
 
-        // 1. Measure Start Time
-        const startTime = performance.now();
-
-        this.fetchData(null)
-            .then(() => {
-                // 2. Measure End Time
-                const endTime = performance.now();
-                const duration = Math.round(endTime - startTime);
-                
-                this.isLoading = false;
-                
-                // 3. Show Toast if Configured
-                if (this.showLoadTimeToast) {
-                    this.showToastMessage('Success', `Timeline loaded in ${duration}ms`, 'success');
-                }
-
-                setTimeout(() => { 
-                    this.renderedCallback(); 
-                    this.startPolling(); 
-                }, 0);
-            });
+        this.fetchData(null).then(() => {
+            this.isLoading = false;
+            setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
+        });
     }
 
     handleLoadMore() {
         if (!this.hasMoreItems || this.isLoadingMore) return;
-        
         const lastItem = this.allItems[this.allItems.length - 1];
         const lastDate = lastItem ? lastItem.createdDate : null;
 
         this.isLoadingMore = true;
-        const startTime = performance.now();
-
-        this.fetchData(lastDate)
-            .then(() => {
-                const endTime = performance.now();
-                const duration = Math.round(endTime - startTime);
-                
-                this.isLoadingMore = false;
-                
-                if (this.showLoadTimeToast) {
-                    this.showToastMessage('Success', `More items loaded in ${duration}ms`, 'success');
-                }
-
-                setTimeout(() => { this.renderedCallback(); }, 0);
-            });
+        this.fetchData(lastDate).then(() => {
+            this.isLoadingMore = false;
+            setTimeout(() => { this.renderedCallback(); }, 0);
+        });
     }
 
     fetchData(beforeDate) {
-        this.logDebug(`Fetching data. Limit: ${this.batchSize}, Before: ${beforeDate}`);
-        
         return getTimelineData({ 
             caseId: this.recordId, 
             beforeDate: beforeDate,
-            limitSize: this.batchSize // Use dynamic batch size
+            limitSize: this.batchSize 
         })
         .then(data => {
-            if (!data || data.length < this.batchSize) {
-                this.hasMoreItems = false; 
-            }
-            
+            if (!data || data.length < this.batchSize) this.hasMoreItems = false; 
             if (data && data.length > 0) {
-                const processed = data.map(this.processItem.bind(this)); // Bind this for context if needed
+                const processed = data.map(this.processItem.bind(this));
                 this.allItems = [...this.allItems, ...processed];
-                this.logDebug(`Loaded ${data.length} items`);
             } else {
                 this.hasMoreItems = false;
             }
-        })
-        .catch(error => {
+        }).catch(error => {
             this.error = error;
             this.isLoading = false;
             this.isLoadingMore = false;
-            console.error(error);
         });
     }
 
-    // --- HELPER FUNCTIONS ---
+    // --- PROCESS ITEM (The "Preview" Logic) ---
+    processItem(item) {
+        let processedItem = { ...item };
 
-    logDebug(message, data) {
-        if (this.debugMode) {
-            if (data) {
-                console.log(`[ND_Timeline DEBUG] ${message}`, data);
+        // 1. Parse Email Content (Hybrid Split/DOM approach)
+        if (processedItem.category === 'Email') {
+            const parsed = this.parseEmailContent(processedItem.body);
+            processedItem.body = parsed.newContent;
+            processedItem.historyBody = parsed.historyContent;
+            processedItem.hasHistory = parsed.hasHistory;
+        }
+
+        // 2. Create Plain Text Preview (First line only)
+        // System messages get NO preview (title only). Others get 1 line.
+        let previewText = '';
+        if (!processedItem.isSystemCategory && processedItem.body) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = processedItem.body;
+            const fullText = tempDiv.innerText || '';
+            
+            // Get first non-empty line
+            const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+            if (lines.length > 0) {
+                previewText = lines[0];
+                // Truncate preview if it's huge
+                if (previewText.length > 120) previewText = previewText.substring(0, 120) + '...';
             } else {
-                console.log(`[ND_Timeline DEBUG] ${message}`);
+                previewText = 'Click to view content...';
             }
         }
-    }
 
-    showToastMessage(title, message, variant) {
-        const event = new ShowToastEvent({
-            title: title,
-            message: message,
-            variant: variant
-        });
-        this.dispatchEvent(event);
-    }
-
-    // Helper to format a single item (Unchanged logic, just binding)
-    processItem(item) {
         return {
-            ...item,
-            historyExpanded: false,
+            ...processedItem,
+            isExpanded: false, // Default collapsed
+            historyExpanded: false, // Default history hidden
+            previewText: previewText,
             rowStyle: '',
-            boxClass: item.isInternal 
+            boxClass: processedItem.isInternal 
                 ? 'slds-box slds-box_x-small slds-m-bottom_small internal-note'
                 : 'slds-box slds-box_x-small slds-m-bottom_small',
-            emailBadgeClass: item.isOutgoing 
+            emailBadgeClass: processedItem.isOutgoing 
                 ? 'slds-badge outgoing-email-badge'
                 : 'slds-badge slds-theme_success',
-            isEmailCategory: item.category === 'Email',
-            isPublicCategory: item.category === 'Public',
-            isInternalCategory: item.category === 'Internal',
-            isSystemCategory: item.category === 'System'
+            isEmailCategory: processedItem.category === 'Email',
+            isPublicCategory: processedItem.category === 'Public',
+            isInternalCategory: processedItem.category === 'Internal',
+            isSystemCategory: processedItem.category === 'System',
+            // Icons
+            expandIcon: 'utility:chevronright'
         };
     }
 
-    // --- STANDARD UI HANDLERS (Same as before) ---
+    // --- PARSING LOGIC ---
+    parseEmailContent(fullBody) {
+        if (!fullBody) return { newContent: '', historyContent: '', hasHistory: false };
+        const MAX_VISIBLE_CHARS = 1950;
+
+        const xmlTagRegex = new RegExp('<\\?xml[\\s\\S]*?\\?>', 'gi');
+        let cleaned = fullBody
+            .replace(/<head[^>]*>[\s\S]*?<\/head>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(xmlTagRegex, '')
+            .replace(/<\/?o:[^>]*>/gi, '')
+            .replace(/<\/?v:[^>]*>/gi, '')
+            .replace(/<\/?w:[^>]*>/gi, '');
+
+        const htmlSplitIndex = this.findSplitIndex(cleaned);
+        let useNaturalSplit = false;
+
+        if (htmlSplitIndex > 0) {
+            const contentBeforeSplit = cleaned.substring(0, htmlSplitIndex);
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = contentBeforeSplit;
+            if (tempDiv.innerText.length <= MAX_VISIBLE_CHARS) {
+                useNaturalSplit = true;
+            }
+        }
+
+        if (useNaturalSplit) {
+            const newContent = cleaned.substring(0, htmlSplitIndex);
+            const historyContent = cleaned.substring(htmlSplitIndex);
+            return { 
+                newContent: this.linkify(newContent), 
+                historyContent: historyContent, 
+                hasHistory: true 
+            };
+        } else {
+            return this.truncateHtml(cleaned, '', MAX_VISIBLE_CHARS);
+        }
+    }
+
+    findSplitIndex(html) {
+        const patterns = [
+            /On\s+[A-Za-z]{3}[\s\S]{0,200}?wrote:/i,
+            /-{3,}\s*(Original|Forwarded)\s+Message\s*-{3,}/i,
+            /(?:From:|<b>From:<\/b>)[\s\S]{1,300}?(?:Sent:|<b>Sent:<\/b>)/i,
+            /From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)/i,
+            /De\s*:.{1,100}?Envoy.{1,100}?:/i,
+            ///<div class="gmail_quote">/i,
+            /_{20,}/
+        ];
+
+        let bestIndex = -1;
+        for (let pattern of patterns) {
+            const match = pattern.exec(html);
+            if (match) {
+                if (bestIndex === -1 || match.index < bestIndex) {
+                    bestIndex = match.index;
+                }
+            }
+        }
+
+        if (bestIndex !== -1) {
+            const lastClose = html.lastIndexOf('>', bestIndex);
+            if (lastClose !== -1 && (bestIndex - lastClose) < 100) {
+                return lastClose + 1;
+            }
+            return bestIndex;
+        }
+        return -1;
+    }
+
+    truncateHtml(html, existingHistory, maxChars) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        const body = doc.body;
+
+        if (body.innerText.length <= maxChars) {
+            return { newContent: this.linkify(html), historyContent: existingHistory, hasHistory: !!existingHistory };
+        }
+
+        const headRoot = document.createElement('div');
+        const tailRoot = document.createElement('div');
+        let charCount = 0;
+        let limitReached = false;
+
+        function processNode(sourceNode, headParent, tailParent) {
+            if (sourceNode.nodeType === Node.TEXT_NODE) {
+                const text = sourceNode.textContent;
+                if (limitReached) {
+                    tailParent.appendChild(sourceNode.cloneNode(true));
+                    return;
+                }
+                if (charCount + text.length <= maxChars) {
+                    headParent.appendChild(sourceNode.cloneNode(true));
+                    charCount += text.length;
+                } else {
+                    const remainingSpace = maxChars - charCount;
+                    headParent.appendChild(document.createTextNode(text.substring(0, remainingSpace)));
+                    tailParent.appendChild(document.createTextNode(text.substring(remainingSpace)));
+                    charCount = maxChars;
+                    limitReached = true;
+                }
+            } else if (sourceNode.nodeType === Node.ELEMENT_NODE) {
+                const headClone = sourceNode.cloneNode(false);
+                const tailClone = sourceNode.cloneNode(false);
+                let hasHead = false, hasTail = false;
+
+                for (let child of sourceNode.childNodes) {
+                    processNode(child, headClone, tailClone);
+                    if (headClone.lastChild) hasHead = true;
+                    if (tailClone.lastChild) hasTail = true;
+                }
+                if (hasHead) headParent.appendChild(headClone);
+                if (hasTail) tailParent.appendChild(tailClone);
+            }
+        }
+
+        for (let child of body.childNodes) {
+            processNode(child, headRoot, tailRoot);
+        }
+
+        const newContentHtml = headRoot.innerHTML + '...';
+        const overflowHtml = tailRoot.innerHTML;
+        const finalHistory = (overflowHtml + (existingHistory ? '<br/><hr/>' + existingHistory : ''));
+
+        return { 
+            newContent: this.linkify(newContentHtml), 
+            historyContent: finalHistory, 
+            hasHistory: true 
+        };
+    }
+
+    linkify(html) {
+        if (!html) return '';
+        
+        // 1. Parse HTML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        // 2. TreeWalker to find text nodes NOT inside <a> tags
+        const walker = document.createTreeWalker(
+            doc.body, 
+            NodeFilter.SHOW_TEXT, 
+            {
+                acceptNode: function(node) {
+                    // Skip if parent is already an anchor <a> tag
+                    if (node.parentElement && node.parentElement.tagName === 'A') {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    // Skip script/style tags
+                    if (node.parentElement && (node.parentElement.tagName === 'SCRIPT' || node.parentElement.tagName === 'STYLE')) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            }, 
+            false
+        );
+
+        const nodesToReplace = [];
+        let currentNode;
+        
+        // 3. Collect nodes (can't modify while walking)
+        while (currentNode = walker.nextNode()) {
+            if (currentNode.nodeValue && currentNode.nodeValue.match(/(\b(https?|ftp):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/i)) {
+                nodesToReplace.push(currentNode);
+            }
+        }
+
+        // 4. Replace text with links
+        const urlPattern = /(\b(https?|ftp):\/\/[-A-Z0-9+&@#\/%?=~_|!:,.;]*[-A-Z0-9+&@#\/%=~_|])/gim;
+        
+        nodesToReplace.forEach(node => {
+            const fragment = document.createDocumentFragment();
+            const parts = node.nodeValue.split(urlPattern);
+            
+            // Regex split creates groups; we rebuild elements
+            let currentText = '';
+            
+            // The split with capturing groups returns: [text, url, protocol, text, ...]
+            // We need to carefully reconstruct
+            const newSpan = document.createElement('span');
+            newSpan.innerHTML = node.nodeValue.replace(urlPattern, '<a href="$1" target="_blank" style="color:#0176d3;">$1</a>');
+            
+            node.parentNode.replaceChild(newSpan, node);
+        });
+
+        return doc.body.innerHTML;
+    }
+
+    // --- INTERACTION HANDLERS ---
+
+    // 1. Toggle Single Item
+    handleTitleClick(event) {
+        event.preventDefault();
+        const clickedId = event.currentTarget.dataset.recordId;
+        this.allItems = this.allItems.map(item => {
+            if (item.id === clickedId) {
+                const isNowExpanded = !item.isExpanded;
+                return { 
+                    ...item, 
+                    isExpanded: isNowExpanded,
+                    expandIcon: isNowExpanded ? 'utility:chevrondown' : 'utility:chevronright'
+                };
+            }
+            return item;
+        });
+        // Wait for DOM update to render body
+        setTimeout(() => { this.renderedCallback(); }, 0);
+    }
     
-    handleRefresh() { this.initialLoad(); }
+    
+
+    // 3. Toggle All (Global Button)
+    handleExpandCollapseAll() {
+        this.areAllExpanded = !this.areAllExpanded;
+        const icon = this.areAllExpanded ? 'utility:chevrondown' : 'utility:chevronright';
+        
+        this.allItems = this.allItems.map(item => ({ 
+            ...item, 
+            isExpanded: this.areAllExpanded,
+            expandIcon: icon
+        }));
+        
+        setTimeout(() => { this.renderedCallback(); }, 0);
+    }
+
+    handleHistoryToggle(event) {
+        event.preventDefault();
+        const clickedId = event.currentTarget.dataset.id;
+        this.allItems = this.allItems.map(item => {
+            if (item.id === clickedId) { return { ...item, historyExpanded: !item.historyExpanded }; }
+            return item;
+        });
+        setTimeout(() => { this.renderedCallback(); }, 0);
+    }
 
     renderedCallback() {
-        // ... (Keep your existing renderedCallback logic exactly as is) ...
         if (this.filteredData && this.filteredData.length > 0) {
             this.filteredData.forEach(item => {
-                const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
-                if (bodyContainer && item.body && !bodyContainer.innerHTML) {
-                    bodyContainer.innerHTML = item.body;
-                    this.attachEventListeners(bodyContainer);
-                }
-                if (item.historyExpanded && item.historyBody) {
-                    const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
-                    if (historyContainer && !historyContainer.innerHTML) {
-                        historyContainer.innerHTML = item.historyBody;
-                        this.attachEventListeners(historyContainer);
+                // Only try to inject HTML if the item is EXPANDED
+                if (item.isExpanded) {
+                    const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
+                    if (bodyContainer && item.body && !bodyContainer.innerHTML) {
+                        bodyContainer.innerHTML = item.body;
+                        this.attachEventListeners(bodyContainer);
+                    }
+                    if (item.historyExpanded && item.historyBody) {
+                        const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
+                        if (historyContainer && !historyContainer.innerHTML) {
+                            historyContainer.innerHTML = item.historyBody;
+                            this.attachEventListeners(historyContainer);
+                        }
                     }
                 }
             });
         }
     }
     
+    // ... (Keep existing attachEventListeners, handleCopyCode, getters, etc.) ...
+    
     attachEventListeners(container) {
-       // ... (Keep existing logic) ...
+       if(!container) return;
        container.querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', this.handleCopyCode.bind(this)));
        container.querySelectorAll('.image-preview-link').forEach(link => link.addEventListener('click', this.handleImagePreviewClick.bind(this)));
        container.querySelectorAll('.mention-link').forEach(link => link.addEventListener('click', this.handleMentionClick.bind(this)));
     }
-    
-    // ... (Keep handleCopyCode, handleImagePreviewClick, handleMentionClick, Getters, handleToggle, etc.) ...
     
     handleCopyCode(event) {
         const btn = event.target;
@@ -310,27 +498,18 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         });
     }
 
-    // Getters
+    // GETTERS
     get sortIcon() { return this.sortDirection === 'desc' ? 'utility:arrowdown' : 'utility:arrowup'; }
     get sortLabel() { return this.sortDirection === 'desc' ? 'Newest First' : 'Oldest First'; }
+    get expandCollapseLabel() { return this.areAllExpanded ? 'Collapse All' : 'Expand All'; }
+    get expandCollapseIcon() { return this.areAllExpanded ? 'utility:collapse_all' : 'utility:expand_all'; }
+    
     get hasData() { return this.filteredData && this.filteredData.length > 0; }
-    // --- DYNAMIC LABEL GETTERS ---
-    get emailLabel() {
-        const count = this.allItems ? this.allItems.filter(item => item.category === 'Email').length : 0;
-        return `Emails (${count})`;
-    }
-    get publicLabel() {
-        const count = this.allItems ? this.allItems.filter(item => item.category === 'Public').length : 0;
-        return `Public (${count})`;
-    }
-    get internalLabel() {
-        const count = this.allItems ? this.allItems.filter(item => item.category === 'Internal').length : 0;
-        return `Internal (${count})`;
-    }
-    get systemLabel() {
-        const count = this.allItems ? this.allItems.filter(item => item.category === 'System').length : 0;
-        return `System (${count})`;
-    }
+    get emailLabel() { return `Emails (${this.allItems.filter(i => i.category === 'Email').length})`; }
+    get publicLabel() { return `Public (${this.allItems.filter(i => i.category === 'Public').length})`; }
+    get internalLabel() { return `Internal (${this.allItems.filter(i => i.category === 'Internal').length})`; }
+    get systemLabel() { return `System (${this.allItems.filter(i => i.category === 'System').length})`; }
+
     get filteredData() {
         let result = this.allItems.filter(item => {
             if (item.category === 'Email' && this.showEmail) return true;
@@ -365,8 +544,37 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             return item;
         });
     }
+    // 1. Toggle Expand/Collapse (Attached to the main box/title)
     handleTitleClick(event) {
         event.preventDefault();
-        this[NavigationMixin.Navigate]({ type: 'standard__recordPage', attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' } });
+        const clickedId = event.currentTarget.dataset.recordId;
+        
+        this.allItems = this.allItems.map(item => {
+            if (item.id === clickedId) {
+                const isNowExpanded = !item.isExpanded;
+                return { 
+                    ...item, 
+                    isExpanded: isNowExpanded,
+                    expandIcon: isNowExpanded ? 'utility:chevrondown' : 'utility:chevronright'
+                };
+            }
+            return item;
+        });
+        
+        // Wait for render to inject HTML into the newly expanded body
+        setTimeout(() => { this.renderedCallback(); }, 0);
+    }
+    
+    // 2. Open Record (Attached to the 'New Window' icon)
+    handleOpenRecord(event) {
+        // Prevent the click from bubbling up to the main box (which would toggle expand)
+        event.preventDefault(); 
+        event.stopPropagation(); 
+        
+        // Perform Navigation
+        this[NavigationMixin.Navigate]({ 
+            type: 'standard__recordPage', 
+            attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' } 
+        });
     }
 }

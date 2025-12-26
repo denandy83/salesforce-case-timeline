@@ -176,3 +176,52 @@ lightning-formatted-rich-text img {
     margin-right: 6px;
     font-size: 1.1em;
 }
+/* ... Keep existing CSS ... */
+
+.cursor-pointer {
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+.cursor-pointer:hover {
+    background-color: rgba(0,0,0,0.02);
+    border-radius: 4px;
+}
+.sticky-history-top {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid #dddbda;
+    
+    /* Pull up and out to cover padding */
+    margin: -1rem -1rem 0 -1rem; 
+    padding: 8px 1rem;
+    
+    text-align: left;
+    border-radius: 4px 4px 0 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.slds-scrollable_y > div:first-child {
+    margin-top: 0 !important;
+}
+
+/* Ensure sticky top pulls fully up */
+.sticky-history-top {
+    /* Keep your existing styles */
+    /* Ensure top is exactly 0 */
+    top: 0 !important;
+}
+.sticky-history-control {
+    position: sticky;
+    bottom: -1rem; /* Pushes it down into the padding area */
+    z-index: 100;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(4px);
+    border-top: 1px solid #dddbda;
+    margin: 0 -1rem -1rem -1rem; /* Stretches full width */
+    border-radius: 0 0 4px 4px;
+    padding: 10px;
+    text-align: center;
+}

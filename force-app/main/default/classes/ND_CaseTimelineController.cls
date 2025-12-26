@@ -242,6 +242,7 @@ public without sharing class ND_CaseTimelineController {
             emailIds.add(em.Id);
         }
         
+        // RE-ADDED: This definition was missing, causing your error
         Map<Id, List<ContentDocumentLink>> emailAttachments = new Map<Id, List<ContentDocumentLink>>();
         if (!emailIds.isEmpty()) {
             for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title
@@ -255,23 +256,34 @@ public without sharing class ND_CaseTimelineController {
         }
         
         for(EmailMessage em : emails) {
-            TimelineItem item = new TimelineItem();
-            item.id = em.Id;
-            item.createdDate = em.MessageDate;
-            item.category = 'Email'; 
-            item.isInternal = false;
-            item.isOutgoing = (em.Incoming == false);
-            item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
-            item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
-            item.recordUrl = '/' + em.Id;
+    TimelineItem item = new TimelineItem();
+    item.id = em.Id;
+    item.createdDate = em.MessageDate;
+    item.category = 'Email'; 
+    item.isInternal = false;
+    item.isOutgoing = (em.Incoming == false);
+    item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
+    item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
+    item.recordUrl = '/' + em.Id;
 
-            ND_EmailCompare.ComparisonResult res = ND_EmailCompare.parse(
-                em.HtmlBody, em.TextBody, null, null
-            );
-            
-            item.body = cleanHtml(res.newContent, false);
-            item.historyBody = cleanHtml(res.historyContent, false);
-            item.hasHistory = res.hasHistory;
+    // --- CHANGED SECTION START ---
+    // We no longer parse/clean in Apex. We send raw data to JS.
+    // We use a temporary field or repurpose 'body' to hold the raw HTML.
+    // If you want to be cleaner, add 'htmlBody' and 'textBody' to your TimelineItem wrapper class.
+    // For now, we will pack the raw HTML into 'body' and let JS handle the rest.
+    
+    if (String.isNotBlank(em.HtmlBody)) {
+        item.body = em.HtmlBody; 
+    } else {
+        item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
+    }
+    
+    // Send the text body as well for fallback processing in JS
+    // (Note: You might need to add 'textBody' to your TimelineItem class if you haven't yet)
+    // item.textBody = em.TextBody; 
+    
+    item.hasHistory = false; // JS will calculate this
+    item.historyBody = '';   // JS will calculate this
             
             if (emailAttachments.containsKey(em.Id)) {
                 List<String> attachmentCards = new List<String>();
