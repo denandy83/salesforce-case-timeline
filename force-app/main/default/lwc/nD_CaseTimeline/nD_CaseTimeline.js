@@ -109,7 +109,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
         });
     }
-
+    handleRefresh(event) {
+        // Prevent default behavior if called from an anchor tag
+        if (event) event.preventDefault();
+        
+        // Simply re-run the initial load logic
+        this.initialLoad();
+    }
     handleLoadMore() {
         if (!this.hasMoreItems || this.isLoadingMore) return;
         const lastItem = this.allItems[this.allItems.length - 1];

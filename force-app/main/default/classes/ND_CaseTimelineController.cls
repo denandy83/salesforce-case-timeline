@@ -21,7 +21,7 @@ public without sharing class ND_CaseTimelineController {
             return 0;
         }
     }
-// --- CONFIGURATION WRAPPER ---
+
     public class TimelineConfig {
         @AuraEnabled public Integer batchSize { get; set; }
         @AuraEnabled public Boolean debugMode { get; set; }
@@ -32,7 +32,6 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public Boolean defaultPublic { get; set; }
         @AuraEnabled public Boolean defaultSystem { get; set; }
         
-        // Constructor with Default Fallbacks
         public TimelineConfig() {
             this.batchSize = 10;
             this.debugMode = false;
@@ -48,7 +47,6 @@ public without sharing class ND_CaseTimelineController {
     @AuraEnabled(cacheable=true)
     public static TimelineConfig getTimelineConfig() {
         TimelineConfig configWrapper = new TimelineConfig();
-        
         try {
             Custom_Configuration__c dbConfig = [
                 SELECT Batch_Size__c, Debug_Mode__c, Loading_Times_Toast__c, 
@@ -64,7 +62,6 @@ public without sharing class ND_CaseTimelineController {
                 if (dbConfig.Batch_Size__c != null) configWrapper.batchSize = (Integer)dbConfig.Batch_Size__c;
                 configWrapper.debugMode = dbConfig.Debug_Mode__c;
                 configWrapper.showToast = dbConfig.Loading_Times_Toast__c;
-                // Convert seconds to milliseconds for JS setInterval
                 if (dbConfig.Polling_Interval__c != null) configWrapper.pollingInterval = (Integer)dbConfig.Polling_Interval__c * 1000; 
                 configWrapper.defaultEmail = dbConfig.Show_Email_Default__c;
                 configWrapper.defaultInternal = dbConfig.Show_Internal_Default__c;
@@ -74,20 +71,14 @@ public without sharing class ND_CaseTimelineController {
         } catch (Exception e) {
             System.debug('No active configuration found, using defaults.');
         }
-        
         return configWrapper;
     }
+
     @AuraEnabled
     public static List<TimelineItem> getTimelineData(Id caseId, DateTime beforeDate, Integer limitSize) {
         if (limitSize == null || limitSize < 1) limitSize = 10;
-        
-        // If no date provided (initial load), use slightly in the future to catch everything
         if (beforeDate == null) beforeDate = DateTime.now().addSeconds(1);
 
-        // 1. Fetch Candidates (Max limitSize from each stream)
-        // We fetch 'limitSize' from BOTH to ensure we have enough candidates to fill the page
-        // even if one stream is empty.
-        
         List<EmailMessage> emailCandidates = [
             SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, CreatedBy.Name, Incoming 
             FROM EmailMessage 
@@ -101,7 +92,7 @@ public without sharing class ND_CaseTimelineController {
         List<FeedItem> feedCandidates = [
             SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText,
             (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges),
-            (SELECT Id, RecordId, Type FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
+            (SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
             FROM FeedItem 
             WHERE ParentId = :caseId 
             AND Type != 'EmailMessageEvent'
@@ -110,26 +101,22 @@ public without sharing class ND_CaseTimelineController {
             LIMIT :limitSize
         ];
 
-        // 2. Mix and Sort in Memory to find the true "Top N"
         List<SObject> combinedRaw = new List<SObject>();
         combinedRaw.addAll((List<SObject>)emailCandidates);
         combinedRaw.addAll((List<SObject>)feedCandidates);
 
-        // Sort using a custom comparator wrapper to handle different Date fields
         List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
         for(SObject obj : combinedRaw) {
             wrappers.add(new RawItemWrapper(obj));
         }
         wrappers.sort();
 
-        // 3. Keep only the top 'limitSize' items
         List<EmailMessage> finalEmails = new List<EmailMessage>();
         List<FeedItem> finalFeeds = new List<FeedItem>();
 
         Integer count = 0;
         for(RawItemWrapper w : wrappers) {
             if (count >= limitSize) break;
-            
             if (w.obj instanceof EmailMessage) {
                 finalEmails.add((EmailMessage)w.obj);
             } else {
@@ -138,7 +125,6 @@ public without sharing class ND_CaseTimelineController {
             count++;
         }
 
-        // 4. PREPARE CONNECT API (Only for the final filtered FeedItems)
         Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
         List<String> idsToEnrich = new List<String>();
         
@@ -163,11 +149,9 @@ public without sharing class ND_CaseTimelineController {
             } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
         }
 
-        // 5. PROCESS (Reuse your existing processItems logic)
         return processItems(finalEmails, finalFeeds, connectMap);
     }
 
-    // --- Helper Wrapper for sorting mixed SObjects by Date ---
     public class RawItemWrapper implements Comparable {
         public SObject obj;
         public DateTime sortDate;
@@ -183,14 +167,13 @@ public without sharing class ND_CaseTimelineController {
         
         public Integer compareTo(Object compareTo) {
             RawItemWrapper other = (RawItemWrapper) compareTo;
-            if (this.sortDate < other.sortDate) return 1; // Descending
+            if (this.sortDate < other.sortDate) return 1;
             if (this.sortDate > other.sortDate) return -1;
             return 0;
         }
     }
 
-   @TestVisible 
-    // 1. UPDATED SIGNATURE: Accepts 'connectMap' instead of 'feedPage'
+    @TestVisible 
     private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap) {
     
         List<TimelineItem> combinedList = new List<TimelineItem>();
@@ -199,8 +182,11 @@ public without sharing class ND_CaseTimelineController {
         String baseUrl = getBaseUrl();
         String fileBaseUrl = getFileBaseUrl();
         
+        // Maps to hold file details
         Map<String, String> documentIdToVersionId = new Map<String, String>();
         Map<String, String> versionIdToDocumentId = new Map<String, String>();
+        Map<String, String> docIdToTitle = new Map<String, String>();
+        Map<String, String> docIdToExtension = new Map<String, String>();
         
         Set<String> contentDocIds = new Set<String>();
         Set<String> contentVersionIds = new Set<String>();
@@ -208,12 +194,13 @@ public without sharing class ND_CaseTimelineController {
         for (FeedItem cf : feedItems) {
             if (cf.FeedAttachments != null && !cf.FeedAttachments.isEmpty()) {
                 for (FeedAttachment fa : cf.FeedAttachments) {
-                    if ((fa.Type == 'InlineImage' || fa.Type == 'Content') && String.isNotBlank(fa.RecordId)) {
-                        String recordId = fa.RecordId;
-                        if (recordId.startsWith('069')) {
-                            contentDocIds.add(recordId);
-                        } else if (recordId.startsWith('068')) {
-                            contentVersionIds.add(recordId);
+                    // Safe Cast and Check
+                    String rId = (String)fa.RecordId;
+                    if ((fa.Type == 'InlineImage' || fa.Type == 'Content') && String.isNotBlank(rId)) {
+                        if (rId.startsWith('069')) {
+                            contentDocIds.add(rId);
+                        } else if (rId.startsWith('068')) {
+                            contentVersionIds.add(rId);
                         }
                     }
                 }
@@ -222,7 +209,8 @@ public without sharing class ND_CaseTimelineController {
 
         if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
             try {
-                List<ContentVersion> versions = [SELECT Id, ContentDocumentId
+                // FIXED: Query Title and FileExtension here
+                List<ContentVersion> versions = [SELECT Id, ContentDocumentId, Title, FileExtension
                                                 FROM ContentVersion 
                                                 WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds)
                                                 AND IsLatest = true];
@@ -230,22 +218,30 @@ public without sharing class ND_CaseTimelineController {
                 for (ContentVersion cv : versions) {
                     documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
                     versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
+                    
+                    // Map details by Document ID (primary key for display)
+                    docIdToTitle.put(cv.ContentDocumentId, cv.Title);
+                    docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
+                    
+                    // Also map by Version ID just in case
+                    docIdToTitle.put(cv.Id, cv.Title);
+                    docIdToExtension.put(cv.Id, cv.FileExtension);
                 }
             } catch (Exception e) {
                 System.debug('ERROR querying ContentVersion: ' + e.getMessage());
             }
         }
 
-        // --- PROCESS EMAILS (Unchanged) ---
+        // --- PROCESS EMAILS ---
         Set<Id> emailIds = new Set<Id>();
         for (EmailMessage em : emails) {
             emailIds.add(em.Id);
         }
         
-        // RE-ADDED: This definition was missing, causing your error
         Map<Id, List<ContentDocumentLink>> emailAttachments = new Map<Id, List<ContentDocumentLink>>();
         if (!emailIds.isEmpty()) {
-            for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title
+            // FIXED: Added ContentDocument.FileExtension to query
+            for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title, ContentDocument.FileExtension
                                              FROM ContentDocumentLink 
                                              WHERE LinkedEntityId IN :emailIds]) {
                 if (!emailAttachments.containsKey(link.LinkedEntityId)) {
@@ -256,80 +252,45 @@ public without sharing class ND_CaseTimelineController {
         }
         
         for(EmailMessage em : emails) {
-    TimelineItem item = new TimelineItem();
-    item.id = em.Id;
-    item.createdDate = em.MessageDate;
-    item.category = 'Email'; 
-    item.isInternal = false;
-    item.isOutgoing = (em.Incoming == false);
-    item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
-    item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
-    item.recordUrl = '/' + em.Id;
+            TimelineItem item = new TimelineItem();
+            item.id = em.Id;
+            item.createdDate = em.MessageDate;
+            item.category = 'Email'; 
+            item.isInternal = false;
+            item.isOutgoing = (em.Incoming == false);
+            item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
+            item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
+            item.recordUrl = '/' + em.Id;
 
-    // --- CHANGED SECTION START ---
-    // We no longer parse/clean in Apex. We send raw data to JS.
-    // We use a temporary field or repurpose 'body' to hold the raw HTML.
-    // If you want to be cleaner, add 'htmlBody' and 'textBody' to your TimelineItem wrapper class.
-    // For now, we will pack the raw HTML into 'body' and let JS handle the rest.
-    
-    if (String.isNotBlank(em.HtmlBody)) {
-        item.body = em.HtmlBody; 
-    } else {
-        item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
-    }
-    
-    // Send the text body as well for fallback processing in JS
-    // (Note: You might need to add 'textBody' to your TimelineItem class if you haven't yet)
-    // item.textBody = em.TextBody; 
-    
-    item.hasHistory = false; // JS will calculate this
-    item.historyBody = '';   // JS will calculate this
+            if (String.isNotBlank(em.HtmlBody)) {
+                item.body = em.HtmlBody; 
+            } else {
+                item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
+            }
+            item.hasHistory = false;
+            item.historyBody = ''; 
             
             if (emailAttachments.containsKey(em.Id)) {
                 List<String> attachmentCards = new List<String>();
                 for (ContentDocumentLink link : emailAttachments.get(em.Id)) {
-                    String fileName = link.ContentDocument.Title;
-                    String docId = link.ContentDocumentId;
-                    
-                    String fileIcon = '📄'; 
-                    String lowerFileName = fileName.toLowerCase();
-                    if (lowerFileName.endsWith('.png') || lowerFileName.endsWith('.jpg') || lowerFileName.endsWith('.jpeg') || lowerFileName.endsWith('.gif') || lowerFileName.endsWith('.webp')) {
-                        fileIcon = '🖼️';
-                    } else if (lowerFileName.endsWith('.pdf')) {
-                        fileIcon = '📕';
-                    } else if (lowerFileName.endsWith('.doc') || lowerFileName.endsWith('.docx')) {
-                        fileIcon = '📘';
-                    } else if (lowerFileName.endsWith('.xls') || lowerFileName.endsWith('.xlsx') || lowerFileName.endsWith('.csv')) {
-                        fileIcon = '📊';
-                    } else if (lowerFileName.endsWith('.ppt') || lowerFileName.endsWith('.pptx')) {
-                        fileIcon = '📙';
-                    } else if (lowerFileName.endsWith('.txt')) {
-                        fileIcon = '📝';
-                    } else if (lowerFileName.endsWith('.zip') || lowerFileName.endsWith('.rar') || lowerFileName.endsWith('.7z')) {
-                        fileIcon = '📦';
-                    }
-                    
-                    String attachmentCard = '<a href="/lightning/r/ContentDocument/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-block; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' +
-                        '<span style="margin-right:6px;">' + fileIcon + '</span>' + fileName +
-                        '</a>';
-                    attachmentCards.add(attachmentCard);
+                    // FIXED: Pass real extension
+                    attachmentCards.add(getAttachmentCardHtml(link.ContentDocumentId, link.ContentDocument.Title, link.ContentDocument.FileExtension));
                 }
                 
                 if (!attachmentCards.isEmpty()) {
-                    item.body += '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
+                    String attachmentSection = '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
+                    item.body += attachmentSection;
                     if (String.isNotBlank(item.historyBody)) {
-                        item.historyBody += '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
+                        item.historyBody += attachmentSection;
                     }
                 }
             }
             combinedList.add(item);
         }
 
-        // --- PROCESS FEED ITEMS (Unified Logic) ---
-        // 2. We now loop through SOQL items and check the Map for rich data
+        // --- PROCESS FEED ITEMS ---
         for (FeedItem soqlFeedItem : feedItems) {
             
-            // Common Filters
             if (soqlFeedItem.Status == 'Draft') continue;
             if (soqlFeedItem.Type == 'EmailMessageEvent') continue;
 
@@ -339,17 +300,14 @@ public without sharing class ND_CaseTimelineController {
             item.hasHistory = false;
             item.recordUrl = '/' + soqlFeedItem.Id;
 
-            // 3. TRY TO GET RICH DATA FROM MAP
             ConnectApi.FeedItem connectFeedItem = (connectMap != null) ? connectMap.get(soqlFeedItem.Id) : null;
 
-            // Determine Author
             if (connectFeedItem != null && connectFeedItem.actor != null) {
                 item.author = connectFeedItem.actor.name;
             } else {
                 item.author = (soqlFeedItem.CreatedBy != null) ? soqlFeedItem.CreatedBy.Name : 'System';
             }
 
-            // Determine Category & Title (Your Logic)
             Boolean isSystemType = (soqlFeedItem.Type == 'TrackedChange' || soqlFeedItem.Type == 'CreateRecordEvent' || soqlFeedItem.Type == 'ActivityEvent' || soqlFeedItem.Type == 'CaseCommentPost' || soqlFeedItem.Type == 'ChangeStatusPost' || (soqlFeedItem.CreatedBy != null && soqlFeedItem.CreatedBy.Name == 'Automated Process') || soqlFeedItem.Title == 'SYSTEM' || soqlFeedItem.Title == 'MILESTONE' || soqlFeedItem.Title == 'Owner Changed');
 
             if (isSystemType) {
@@ -370,7 +328,6 @@ public without sharing class ND_CaseTimelineController {
                 item.title = '🔒 Internal Note';
             }
 
-            // 4. RICH BODY PROCESSING (If map has data)
             if (connectFeedItem != null) {
                 String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
                 Map<String, String> mentionReplacements = new Map<String, String>();
@@ -396,11 +353,11 @@ public without sharing class ND_CaseTimelineController {
                     formattedBody = formattedBody.replace(mentionText, mentionReplacements.get(mentionText));
                 }
                 
-                // Process Body & Attachments (Unified logic)
                 String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                cleanBody = appendImages(cleanBody, soqlFeedItem, fileBaseUrl, documentIdToVersionId);
+                
+                // FIXED: Pass maps to helper
+                cleanBody = appendFeedAttachments(cleanBody, soqlFeedItem, versionIdToDocumentId, docIdToTitle, docIdToExtension);
 
-                // Parsers
                 String parsedResult = null;
                 if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) {
                     parsedResult = parseFeedEventString(formattedBody, statusMap);
@@ -412,7 +369,6 @@ public without sharing class ND_CaseTimelineController {
                     item.body = cleanHtml(cleanBody, true);
                     item.body = makeImagesClickable(item.body, versionIdToDocumentId);
                     
-                    // Restore mentions
                     for (String placeholder : mentionProtectionMap.keySet()) {
                         item.body = item.body.replace(placeholder, mentionProtectionMap.get(placeholder));
                     }
@@ -420,11 +376,12 @@ public without sharing class ND_CaseTimelineController {
                     item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
                 }
             } 
-            // 5. FALLBACK PROCESSING (If no map data)
             else {
                 String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
                 String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                cleanBody = appendImages(cleanBody, soqlFeedItem, fileBaseUrl, documentIdToVersionId);
+                
+                // FIXED: Pass maps to helper
+                cleanBody = appendFeedAttachments(cleanBody, soqlFeedItem, versionIdToDocumentId, docIdToTitle, docIdToExtension);
 
                 String parsedResult = null;
                 if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) {
@@ -438,7 +395,7 @@ public without sharing class ND_CaseTimelineController {
                     item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, statusMap);
                 } 
                 else if (String.isNotBlank(cleanBody)) {
-                    item.body = cleanHtml(cleanBody, true); // true = Linkify
+                    item.body = cleanHtml(cleanBody, true); 
                     item.body = makeImagesClickable(item.body, versionIdToDocumentId);
                 } else {
                     item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
@@ -452,54 +409,94 @@ public without sharing class ND_CaseTimelineController {
         return combinedList;
     }
 
-    // --- HELPER to reduce code duplication in the loop above ---
-    private static String appendImages(String body, FeedItem soqlFeedItem, String fileBaseUrl, Map<String, String> documentIdToVersionId) {
+    // --- NEW HELPER: Generates the attachment card HTML with explicit Extension support ---
+    private static String getAttachmentCardHtml(String docId, String fileName, String fileExtension) {
+        if (fileName == null) fileName = 'Attachment';
+        
+        String fileIcon = '📄'; 
+        // Use extension if available, otherwise fallback to filename check
+        String checkStr = (String.isNotBlank(fileExtension)) ? '.' + fileExtension.toLowerCase() : fileName.toLowerCase();
+        
+        if (checkStr.endsWith('png') || checkStr.endsWith('jpg') || checkStr.endsWith('jpeg') || checkStr.endsWith('gif') || checkStr.endsWith('webp')) {
+            fileIcon = '🖼️';
+        } else if (checkStr.endsWith('pdf')) {
+            fileIcon = '📕';
+        } else if (checkStr.endsWith('doc') || checkStr.endsWith('docx')) {
+            fileIcon = '📘';
+        } else if (checkStr.endsWith('xls') || checkStr.endsWith('xlsx') || checkStr.endsWith('csv')) {
+            fileIcon = '📊';
+        } else if (checkStr.endsWith('ppt') || checkStr.endsWith('pptx')) {
+            fileIcon = '📙';
+        } else if (checkStr.endsWith('txt')) {
+            fileIcon = '📝';
+        } else if (checkStr.endsWith('zip') || checkStr.endsWith('rar') || checkStr.endsWith('7z')) {
+            fileIcon = '📦';
+        }
+        
+        return '<a href="/lightning/r/ContentDocument/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-flex; align-items:center; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' +
+            '<span style="margin-right:6px; font-size:1.1em;">' + fileIcon + '</span>' + fileName +
+            '</a>';
+    }
+
+    // --- NEW HELPER: Appends Feed Attachments using lookup maps for Title/Ext ---
+    private static String appendFeedAttachments(String body, FeedItem soqlFeedItem, Map<String, String> versionIdToDocumentId, Map<String, String> docIdToTitle, Map<String, String> docIdToExtension) {
         String result = body;
-        List<String> attachmentImages = new List<String>();
+        List<String> attachmentCards = new List<String>();
+        
         if (soqlFeedItem.FeedAttachments != null && !soqlFeedItem.FeedAttachments.isEmpty()) {
             for (FeedAttachment fa : soqlFeedItem.FeedAttachments) {
-                if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(fa.RecordId)) {
-                    String recordId = fa.RecordId;
-                    String versionId = documentIdToVersionId.get(recordId);
-                    if (recordId.startsWith('068')) versionId = recordId;
+                String rId = (String)fa.RecordId;
+                if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(rId)) {
+                    String docId = null;
                     
-                    if (String.isNotBlank(versionId)) {
-                        if (String.isBlank(result) || !result.contains(versionId)) {
-                            String thumbUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + versionId + '&operationContext=CHATTER&contentId=' + recordId;
-                            String fullUrl = fileBaseUrl + '/sfc/servlet.shepherd/version/download/' + versionId;
-                            attachmentImages.add('<a href="' + fullUrl + '" target="_blank" style="display:block; margin-top:10px; max-width:80%;"><img src="' + thumbUrl + '" alt="Attachment" style="max-width:100%; cursor:pointer;" /></a>');
+                    if (rId.startsWith('069')) {
+                        docId = rId;
+                    } 
+                    else if (rId.startsWith('068')) {
+                        if (versionIdToDocumentId.containsKey(rId)) {
+                            docId = versionIdToDocumentId.get(rId);
                         }
+                    }
+
+                    if (String.isNotBlank(docId)) {
+                        // Retrieve explicit title and extension from our maps
+                        String realTitle = docIdToTitle.get(docId);
+                        String realExt = docIdToExtension.get(docId);
+                        
+                        // Fallback to FeedAttachment title if map failed
+                        if (String.isBlank(realTitle)) realTitle = fa.Title;
+                        
+                        attachmentCards.add(getAttachmentCardHtml(docId, realTitle, realExt));
                     }
                 }
             }
         }
-        if (!attachmentImages.isEmpty()) {
-            String prefix = String.isNotBlank(result) ? '<br/>' : '';
-            result += prefix + String.join(attachmentImages, '<br/>');
+
+        if (!attachmentCards.isEmpty()) {
+            String attachmentSection = '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
+            result = (String.isNotBlank(result) ? result : '') + attachmentSection;
         }
         return result;
     }
-@AuraEnabled
-public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
-    if (caseId == null || lastCheckDate == null) return false;
-    
-    // Efficiently check if ANY new FeedItem exists after our last sync timestamp.
-    // We filter by specific types to avoid triggering on background system noise 
-    // (unless you want to add 'TrackedChange' to this list).
-    Integer count = [SELECT Count()
-                     FROM FeedItem 
-                     WHERE ParentId = :caseId 
-                     AND CreatedDate > :lastCheckDate
-                     AND Type IN ('TextPost', 'EmailMessageEvent', 'ContentPost', 'LinkPost')
-                     LIMIT 1];
-                     
-    return count > 0;
-}
+
+    @AuraEnabled
+    public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
+        if (caseId == null || lastCheckDate == null) return false;
+        
+        Integer count = [SELECT Count()
+                        FROM FeedItem 
+                        WHERE ParentId = :caseId 
+                        AND CreatedDate > :lastCheckDate
+                        AND Type IN ('TextPost', 'EmailMessageEvent', 'ContentPost', 'LinkPost')
+                        LIMIT 1];
+                        
+        return count > 0;
+    }
+
     private static String processTrackedChanges(List<FeedTrackedChange> changes, Map<String, String> statusMap) {
         List<String> result = new List<String>();
         for (FeedTrackedChange ftc : changes) {
             String field = (ftc.FieldName != null) ? ftc.FieldName : 'Field';
-            
             String label = field;
             try {
                 if (field.startsWith('Case.')) {
@@ -518,7 +515,6 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
             String oldV = String.valueOf(ftc.OldValue);
             String newV = String.valueOf(ftc.NewValue);
             
-            // Special handling for feedEvent (contains JSON with actual status change)
             if (field == 'feedEvent' && String.isNotBlank(oldV)) {
                 try {
                     Map<String, Object> root = (Map<String, Object>) JSON.deserializeUntyped(oldV);
@@ -545,7 +541,6 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
                     result.add('<b>' + label + '</b>: <i>(Updated)</i>');
                 }
             } else {
-                // Normal field change
                 if ((field == 'Status' || field == 'Case.Status') && statusMap != null) {
                     if (oldV != null && statusMap.containsKey(oldV)) oldV = statusMap.get(oldV);
                     if (newV != null && statusMap.containsKey(newV)) newV = statusMap.get(newV);
@@ -721,14 +716,10 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
 
     private static String cleanHtml(String html, Boolean shouldLinkify) {
         if (String.isBlank(html)) return '';
-        
-        // 1. Basic cleanup
         html = html.replace('<html', '<div').replace('</html>', '</div>')
                    .replace('<body', '<div').replace('</body>', '</div>')
                    .replace('<!DOCTYPE html>', '');
         
-        // 2. PROTECT CODE BLOCKS
-        // FIX: Use Quad Brackets to ensure regex doesn't eat the placeholder
         Map<String, String> codeMap = new Map<String, String>();
         Integer codeIndex = 0;
         Pattern codePattern = Pattern.compile('(?is)<code>(.*?)</code>');
@@ -742,27 +733,21 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
             codeIndex++;
         }
 
-        // 3. Linkify URLs
         if (shouldLinkify) {
             html = linkifyUrls(html);
         }
         
-        // 4. RESTORE CODE BLOCKS
         for (String placeholder : codeMap.keySet()) {
             html = html.replace(placeholder, codeMap.get(placeholder));
         }
 
-        // 5. Style code blocks (safe now)
         html = styleCodeBlocks(html);
-        
         return html;
     }
     
     private static String linkifyUrls(String html) {
         if (String.isBlank(html)) return html;
 
-        // A. MASK HTML TAGS
-        // FIX: Use Quad Brackets to ensure regex stops at the placeholder
         Map<String, String> tagMap = new Map<String, String>();
         Integer tagIndex = 0;
         Pattern tagPattern = Pattern.compile('(?s)<[^>]+>'); 
@@ -776,9 +761,6 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
             tagIndex++;
         }
 
-        // B. DETECT URLS (Robust Regex)
-        // FIX: Replaced [ and ] with \\x5B and \\x5D to prevent Apex "Unclosed character class" error
-        // while preserving the exact logic of "anything except whitespace, quotes, angle brackets, or square brackets"
         String tldList = 'com|org|net|edu|gov|mil|biz|info|io|co|uk|be|eu|de|fr|it|es|nl|ru|ch|se|no|dk|pl|cs|cz|gr|ie|hu|pt|ro|sk|fi|bg|hr|lt|lv|ee|ca|au|nz|us|in|jp|cn|kr|br|mx|za|il|ae';
         
         String urlRegex = '(?i)' + 
@@ -797,22 +779,17 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
         
         while (urlMatcher.find()) {
             result += html.substring(lastEnd, urlMatcher.start());
-            
             String rawUrl = urlMatcher.group(1);
             String url = rawUrl;
             
-            // TRIM PUNCTUATION
-            // FIX: Smart trim that respects parenthesis matching
             while (true) {
                 Boolean trimmed = false;
                 String lastChar = url.right(1);
                 
-                // Always trim standard punctuation
                 if (lastChar == '.' || lastChar == ',' || lastChar == '!' || lastChar == '?' || lastChar == ';' || lastChar == ':' || lastChar == ']') {
                     url = url.substring(0, url.length() - 1);
                     trimmed = true;
                 }
-                // Only trim ')' if parenthesis count is unbalanced (more close than open)
                 else if (lastChar == ')') {
                     Integer openCount = url.countMatches('(');
                     Integer closeCount = url.countMatches(')');
@@ -821,7 +798,6 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
                         trimmed = true;
                     }
                 }
-                
                 if (!trimmed) break;
                 if (url.length() == 0) break;
             }
@@ -844,7 +820,6 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
         }
         result += html.substring(lastEnd);
         
-        // C. RESTORE HTML TAGS
         for (String placeholder : tagMap.keySet()) {
             result = result.replace(placeholder, tagMap.get(placeholder));
         }
@@ -864,20 +839,15 @@ public static Boolean checkForNewItems(Id caseId, DateTime lastCheckDate) {
             String codeContent = m.group(1);
             String fullMatch = m.group(0);
             
-            // NO ESCAPING NEEDED for the Raw Content in textarea.
-            // We pass codeContent exactly as found.
-            
             String[] lines = codeContent.split('\n');
             String numberedCode = '';
             for (Integer i = 0; i < lines.size(); i++) {
-                // Display lines remain raw (trusting Salesforce storage)
                 numberedCode += '<div class="code-line"><span class="line-num">' + (i + 1) + '</span><span class="line-content">' + lines[i] + '</span></div>';
             }
             
             String codeId = 'code-block-' + blockId;
             blockId++;
             
-            // Build the Block with hidden textarea
             String replacement = '<div class="code-wrapper">' + 
                 '<textarea class="raw-code-storage" style="display:none;">' + codeContent + '</textarea>' +
                 '<button class="copy-btn">Copy</button>' + 
