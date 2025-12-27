@@ -26,6 +26,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     // Global toggle state (false = all collapsed initially)
     @track areAllExpanded = false;
     @track showAttachmentsCollapsed = true;
+    @track useToastForUpdates = false;
+    @track previewLines = 1;
 
     lastRefreshDate; 
     _pollingTimer;
@@ -69,11 +71,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.showInternal = config.defaultInternal;
             this.showSystem = config.defaultSystem;
             this.showAttachmentsCollapsed = config.showAttachmentsCollapsed;
+            this.useToastForUpdates = config.useToastForUpdates;
             if (config.visibleCharLimit !== undefined && config.visibleCharLimit !== null) {
                 this.visibleCharLimit = config.visibleCharLimit;
             }
             this.expandByDefault = config.expandByDefault;
             this.areAllExpanded = config.expandByDefault;
+            this.previewLines = config.previewLines || 1;
             
             if (this.showLoadTimeToast) {
                 this.dispatchEvent(
@@ -107,10 +111,27 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
 
     checkServerForUpdates() {
         if (!this.recordId || !this.lastRefreshDate) return;
+        
         checkForNewItems({ caseId: this.recordId, lastCheckDate: this.lastRefreshDate })
         .then(hasNewData => {
             if (hasNewData) {
-                this.isNewDataAvailable = true;
+                // CONDITIONAL LOGIC
+                if (this.useToastForUpdates) {
+                    // Option A: Show Standard Salesforce Toast
+                    this.dispatchEvent(
+                        new ShowToastEvent({
+                            title: 'Update Available',
+                            message: 'New data received. Refresh the case to see it!',
+                            variant: 'info',
+                            mode: 'sticky' // 'sticky' ensures they see it until they dismiss it
+                        })
+                    );
+                } else {
+                    // Option B: Show Custom "Floating Toast" / Banner
+                    this.isNewDataAvailable = true;
+                }
+                
+                // Stop polling in both cases to prevent repeated notifications
                 this.stopPolling();
             }
         }).catch(console.error);
@@ -202,30 +223,40 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             processedItem.hasHistory = parsed.hasHistory;
         }
 
-        // 2. Create Plain Text Preview (First line only)
-        // System messages get NO preview (title only). Others get 1 line.
+        // 2. Create Plain Text Preview
         let previewText = '';
         if (!processedItem.isSystemCategory && processedItem.body) {
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = processedItem.body;
             const fullText = tempDiv.innerText || '';
             
-            // Get first non-empty line
-            const lines = fullText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
-            if (lines.length > 0) {
-                previewText = lines[0];
-                // Truncate preview if it's huge
-                if (previewText.length > 120) previewText = previewText.substring(0, 120) + '...';
+            // CLEANER: Replace newlines with spaces so text flows into the multi-line block
+            const cleanText = fullText.replace(/\s+/g, ' ').trim();
+            
+            if (cleanText.length > 0) {
+                // Grab enough text to fill ~3-4 lines (400 chars is plenty safe)
+                // The CSS will handle the actual cutting off visually.
+                previewText = cleanText.substring(0, 400); 
             } else {
                 previewText = 'Click to view content...';
             }
         }
+
+        // DYNAMIC CSS: Create the clamp style based on the user setting
+        const lineClampStyle = `
+            display: -webkit-box; 
+            -webkit-line-clamp: ${this.previewLines}; 
+            -webkit-box-orient: vertical; 
+            overflow: hidden; 
+            text-overflow: ellipsis;
+        `;
 
         return {
             ...processedItem,
             isExpanded: this.expandByDefault,
             historyExpanded: false, // Default history hidden
             previewText: previewText,
+            previewStyle: lineClampStyle,
             rowStyle: '',
             boxClass: processedItem.isInternal 
                 ? 'slds-box slds-box_x-small slds-m-bottom_small internal-note'
@@ -551,12 +582,32 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     }
 
     handleImagePreviewClick(event) {
-        event.preventDefault(); event.stopPropagation();
-        this[NavigationMixin.Navigate]({
-            type: 'standard__namedPage',
-            attributes: { pageName: 'filePreview' },
-            state: { selectedRecordId: event.currentTarget.dataset.docId }
-        });
+        event.preventDefault(); 
+        event.stopPropagation();
+        
+        const docId = event.currentTarget.dataset.docId;
+
+        // CHECK ID PREFIX
+        // '00P' is the key prefix for Legacy Attachments. 
+        // These CANNOT use the 'filePreview' page type.
+        if (docId && docId.startsWith('00P')) {
+            this[NavigationMixin.Navigate]({
+                type: 'standard__recordPage',
+                attributes: {
+                    recordId: docId,
+                    objectApiName: 'Attachment',
+                    actionName: 'view'
+                }
+            });
+        } 
+        // '069' is ContentDocument (Files). These look great in 'filePreview'.
+        else {
+            this[NavigationMixin.Navigate]({
+                type: 'standard__namedPage',
+                attributes: { pageName: 'filePreview' },
+                state: { selectedRecordId: docId }
+            });
+        }
     }
 
     handleMentionClick(event) {

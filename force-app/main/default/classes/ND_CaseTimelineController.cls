@@ -37,6 +37,8 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public Integer visibleCharLimit { get; set; } 
         @AuraEnabled public Boolean expandByDefault { get; set; }
         @AuraEnabled public Boolean showAttachmentsCollapsed { get; set; }
+        @AuraEnabled public Boolean useToastForUpdates { get; set; }
+        @AuraEnabled public Integer previewLines { get; set; }
         @AuraEnabled public String configName { get; set; }
         
         public TimelineConfig() {
@@ -51,6 +53,8 @@ public without sharing class ND_CaseTimelineController {
             this.visibleCharLimit = 0; 
             this.expandByDefault = false;
             this.showAttachmentsCollapsed = true;
+            this.useToastForUpdates = false;
+            this.previewLines = 1;
             this.configName = 'CC-001';
         }
     }
@@ -67,7 +71,8 @@ public without sharing class ND_CaseTimelineController {
                        Polling_Interval__c, Show_Email_Default__c, 
                        Show_Internal_Default__c, Show_Public_Default__c, 
                        Show_Sytem_Default__c, Visible_Character_Limit__c,
-                       Expand_by_default__c, Show_Attachments_Collapsed__c
+                       Expand_by_default__c, Show_Attachments_Collapsed__c,
+                       Toast_for_new_data__c, Collapsed_Preview_Lines__c
                 FROM Custom_Configuration__c 
                 WHERE Active__c = true 
                 AND OwnerId = :currentUserId 
@@ -86,7 +91,9 @@ public without sharing class ND_CaseTimelineController {
                     Expand_by_default__c = false,
                     Show_Email_Default__c = true,
                     Show_Attachments_Collapsed__c = true,
+                    Toast_for_new_data__c = false,
                     Show_Internal_Default__c = true,
+                    Collapsed_Preview_Lines__c = 1,
                     Show_Public_Default__c = true,
                     Show_Sytem_Default__c = false,
                     Debug_Mode__c = false,
@@ -108,8 +115,12 @@ public without sharing class ND_CaseTimelineController {
                 configWrapper.defaultPublic = dbConfig.Show_Public_Default__c;
                 configWrapper.defaultSystem = dbConfig.Show_Sytem_Default__c;
                 if (dbConfig.Visible_Character_Limit__c != null) configWrapper.visibleCharLimit = (Integer)dbConfig.Visible_Character_Limit__c;
+                if (dbConfig.Collapsed_Preview_Lines__c != null) {
+                    configWrapper.previewLines = (Integer)dbConfig.Collapsed_Preview_Lines__c;
+                }
                 configWrapper.expandByDefault = dbConfig.Expand_by_default__c;
-                configWrapper.showAttachmentsCollapsed = dbConfig.Show_Attachments_Collapsed__c; 
+                configWrapper.showAttachmentsCollapsed = dbConfig.Show_Attachments_Collapsed__c;
+                configWrapper.useToastForUpdates = dbConfig.Toast_for_new_data__c; 
             }
         } catch (Exception e) {
             System.debug('Error in getTimelineConfig: ' + e.getMessage());

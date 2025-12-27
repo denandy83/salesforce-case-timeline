@@ -29,7 +29,6 @@ public class ND_TimelineTest_Final {
         insert fi;
         
         // 4. Create a Feed Item with an Attachment (ContentPost)
-        // This ensures getFeedAttachmentsHtml is tested via the SOQL path
         FeedItem fiPost = new FeedItem(
             ParentId = c.Id,
             Body = 'Feed with Attachment',
@@ -82,15 +81,32 @@ public class ND_TimelineTest_Final {
     @isTest
     static void testConfigLogic() {
         Test.startTest();
+        // 1. Test Wrapper Constructor directly (Coverage for defaults)
         ND_CaseTimelineController.TimelineConfig wrapper = new ND_CaseTimelineController.TimelineConfig();
         System.assertEquals(10, wrapper.batchSize);
+        // Verify new default values in wrapper
+        System.assertEquals(1, wrapper.previewLines, 'Default preview lines should be 1');
+        System.assertEquals(false, wrapper.useToastForUpdates, 'Default toast usage should be false');
 
+        // 2. Test Get Config (Creates New)
         ND_CaseTimelineController.TimelineConfig c1 = ND_CaseTimelineController.getTimelineConfig();
         System.assertNotEquals(null, c1.configId);
+        // Verify DB defaults
+        System.assertEquals(1, c1.previewLines);
+        System.assertEquals(false, c1.useToastForUpdates);
 
+        // 3. Update the Config Record to test mapping
+        Custom_Configuration__c dbConfig = [SELECT Id FROM Custom_Configuration__c WHERE Id = :c1.configId];
+        dbConfig.Collapsed_Preview_Lines__c = 5;
+        dbConfig.Toast_for_new_data__c = true;
+        update dbConfig;
+
+        // 4. Retrieve again and verify updates
         ND_CaseTimelineController.TimelineConfig c2 = ND_CaseTimelineController.getTimelineConfig();
         System.assertEquals(c1.configId, c2.configId);
-        System.assertEquals(true, c1.showAttachmentsCollapsed, 'Default should be true');
+        System.assertEquals(5, c2.previewLines, 'Should return updated preview lines');
+        System.assertEquals(true, c2.useToastForUpdates, 'Should return updated toast setting');
+        
         Test.stopTest();
     }
 
@@ -130,8 +146,7 @@ public class ND_TimelineTest_Final {
         System.assert(foundLegacy, 'Legacy Attachment HTML should be generated');
         System.assert(foundModern, 'ContentDocumentLink HTML should be generated');
         System.assert(foundFeedLink, 'Should have auto-linked the URL');
-        // Note: FeedAttachment assertion might vary based on Feed Type support in test context, 
-        // but running the loop provides the necessary code coverage.
+        // Note: FeedAttachment assertion might vary based on Feed Type support in test context
     }
 
     @isTest

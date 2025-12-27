@@ -51,6 +51,7 @@
         </div>
       </div>
     </div>
+
     <template if:true={isNewDataAvailable}>
       <div class="slds-notify slds-notify_alert slds-alert_warning" role="alert"
       style="border-radius:0;">
@@ -58,11 +59,11 @@
         class="slds-m-right_x-small">
         </lightning-icon>
         <h2>
-          There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;"> refresh </a>
-to see it.
+          There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;">refresh</a>&nbsp;to see it.
         </h2>
       </div>
     </template>
+
     <div class="slds-p-horizontal_medium slds-p-bottom_medium slds-scrollable_y"
     style="height: 70vh; max-height: 800px;">
       <template if:true={isLoading}>
@@ -112,27 +113,31 @@ to see it.
                 </div>
               </div>
               <template if:false={item.isExpanded}>
-    <template if:true={item.previewText}>
-        <div class="slds-text-body_small slds-text-color_weak slds-m-left_medium slds-p-left_small slds-border_left slds-truncate"
-        style="max-width: 90%; cursor:pointer;" onclick={handleTitleClick} data-record-id={item.id}>
-        {item.previewText}
-        </div>
-    </template>
-    
-    <template if:true={showAttachmentsCollapsed}>
-        <template if:true={item.attachmentsHtml}>
-            <div class="slds-m-top_small" 
-                 style="margin-left: -0.75rem; margin-right: -0.75rem; margin-bottom: -0.75rem; 
-                        padding: 0.5rem 0.75rem; 
-                        background-color: inherit;
-                        border-bottom-left-radius: 0.25rem; border-bottom-right-radius: 0.25rem;">
+                
+                <template if:true={item.previewText}>
+                    <div class="slds-text-body_small slds-text-color_weak slds-m-left_medium slds-p-left_small slds-border_left"
+                         style={item.previewStyle}
+                         title={item.previewText} 
+                         onclick={handleTitleClick} 
+                         data-record-id={item.id}>
+                    {item.previewText}
+                    </div>
+                </template>
+                
+                <template if:true={showAttachmentsCollapsed}>
+                    <template if:true={item.attachmentsHtml}>
+                        <div class="slds-m-top_small" 
+                             style="margin-left: -0.75rem; margin-right: -0.75rem; margin-bottom: -0.75rem; 
+                                    padding: 0.5rem 0.75rem; 
+                                    background-color: inherit;
+                                    border-bottom-left-radius: 0.25rem; border-bottom-right-radius: 0.25rem;">
+            
+                            <div data-attachments-collapsed-id={item.id} lwc:dom="manual"></div>
+                        </div>
+                    </template>
+                </template>
 
-                <div data-attachments-collapsed-id={item.id} lwc:dom="manual"></div>
-            </div>
-        </template>
-    </template>
-
-</template>
+              </template>
               <template if:true={item.isExpanded}>
                 <div class="slds-m-top_small slds-p-top_small slds-border_top" style="position: relative;">
                   <div class="slds-text-body_small slds-m-bottom_small">
@@ -298,21 +303,42 @@ to see it.
                     <lightning-helptext content="If enabled, timeline items will be expanded by default when loaded.">
                     </lightning-helptext>
                   </div>
-                  
                   <div class="slds-form-element__control">
                     <lightning-input-field field-name="Expand_by_default__c" variant="label-hidden">
                     </lightning-input-field>
                   </div>
                 </div>
+
                 <div class="slds-form-element slds-m-bottom_small">
-    <div class="slds-grid slds-grid_vertical-align-center">
-        <label class="slds-form-element__label slds-m-bottom_none">Show Attachments Collapsed</label>
-        <lightning-helptext content="If enabled, attachment icons will be visible even when the timeline item is collapsed."></lightning-helptext>
-    </div>
-    <div class="slds-form-element__control">
-        <lightning-input-field field-name="Show_Attachments_Collapsed__c" variant="label-hidden"></lightning-input-field>
-    </div>
-</div>
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                        <label class="slds-form-element__label slds-m-bottom_none">Use System Toast for Updates</label>
+                        <lightning-helptext content="If checked, new data notifications will appear as a standard Salesforce toast. If unchecked, a custom reload button will appear on the timeline."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Toast_for_new_data__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                        <label class="slds-form-element__label slds-m-bottom_none">Show Attachments Collapsed</label>
+                        <lightning-helptext content="If enabled, attachment icons will be visible even when the timeline item is collapsed."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Show_Attachments_Collapsed__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                         <label class="slds-form-element__label slds-m-bottom_none">Collapsed Preview Lines</label>
+                         <lightning-helptext content="Number of text lines to display when an item is collapsed. Default is 1."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Collapsed_Preview_Lines__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
               </div>
               <div class="slds-col slds-size_1-of-2">
                 <h3 class="slds-text-title_caps slds-m-bottom_small">
