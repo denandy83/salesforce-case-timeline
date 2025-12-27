@@ -25,6 +25,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     
     // Global toggle state (false = all collapsed initially)
     @track areAllExpanded = false;
+    @track showAttachmentsCollapsed = true;
 
     lastRefreshDate; 
     _pollingTimer;
@@ -67,6 +68,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.showPublic = config.defaultPublic;
             this.showInternal = config.defaultInternal;
             this.showSystem = config.defaultSystem;
+            this.showAttachmentsCollapsed = config.showAttachmentsCollapsed;
             if (config.visibleCharLimit !== undefined && config.visibleCharLimit !== null) {
                 this.visibleCharLimit = config.visibleCharLimit;
             }
@@ -124,8 +126,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this.error = undefined;
         this.isNewDataAvailable = false;
         this.lastRefreshDate = new Date().toISOString();
-
-        this.fetchData(null).then(() => {
+        const startTime = performance.now();
+        this.fetchData(null,startTime).then(() => {
             this.isLoading = false;
             setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
         });
@@ -141,21 +143,39 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (!this.hasMoreItems || this.isLoadingMore) return;
         const lastItem = this.allItems[this.allItems.length - 1];
         const lastDate = lastItem ? lastItem.createdDate : null;
+        
+        const startTime = performance.now(); // Start Timer
 
         this.isLoadingMore = true;
-        this.fetchData(lastDate).then(() => {
+        this.fetchData(lastDate, startTime).then(() => { // Pass Timer
             this.isLoadingMore = false;
             setTimeout(() => { this.renderedCallback(); }, 0);
         });
     }
 
-    fetchData(beforeDate) {
+    fetchData(beforeDate, startTime) {
         return getTimelineData({ 
             caseId: this.recordId, 
             beforeDate: beforeDate,
             limitSize: this.batchSize 
         })
         .then(data => {
+            // --- NEW: Calculate Duration & Show Toast ---
+            if (startTime && this.showLoadTimeToast) {
+                const endTime = performance.now();
+                const duration = Math.round(endTime - startTime);
+                
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Data Loaded',
+                        message: `Loaded ${data ? data.length : 0} items in ${duration}ms`,
+                        variant: 'success',
+                        mode: 'dismissible'
+                    })
+                );
+            }
+            // ---------------------------------------------
+
             if (!data || data.length < this.batchSize) this.hasMoreItems = false; 
             if (data && data.length > 0) {
                 const processed = data.map(this.processItem.bind(this));
@@ -466,7 +486,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     renderedCallback() {
         if (this.filteredData && this.filteredData.length > 0) {
             this.filteredData.forEach(item => {
-                // Only try to inject HTML if the item is EXPANDED
+                
+                // 1. EXPANDED VIEW (Always show attachments if expanded)
                 if (item.isExpanded) {
                     const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
                     if (bodyContainer && item.body && !bodyContainer.innerHTML) {
@@ -480,12 +501,29 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                             this.attachEventListeners(historyContainer);
                         }
                     }
+                    const attachContainer = this.template.querySelector(`[data-attachments-id="${item.id}"]`);
+                    if (attachContainer && item.attachmentsHtml && !attachContainer.innerHTML) {
+                        attachContainer.innerHTML = item.attachmentsHtml;
+                        this.attachEventListeners(attachContainer);
+                    }
+                } 
+                
+                // 2. COLLAPSED VIEW (Conditional based on Config)
+                else if (this.showAttachmentsCollapsed) { // <--- CHECK CONFIG HERE
+                    const collapsedAttachContainer = this.template.querySelector(`[data-attachments-collapsed-id="${item.id}"]`);
+                    if (collapsedAttachContainer && item.attachmentsHtml && !collapsedAttachContainer.innerHTML) {
+                        collapsedAttachContainer.innerHTML = item.attachmentsHtml;
+                        this.attachEventListeners(collapsedAttachContainer);
+                        
+                        // Prevent row expansion when clicking the file
+                        collapsedAttachContainer.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                        });
+                    }
                 }
             });
         }
     }
-    
-    // ... (Keep existing attachEventListeners, handleCopyCode, getters, etc.) ...
     
     attachEventListeners(container) {
        if(!container) return;

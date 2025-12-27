@@ -225,3 +225,19 @@ lightning-formatted-rich-text img {
     padding: 10px;
     text-align: center;
 }
+/* Restore paragraph spacing for Email Bodies */
+.email-body-main p {
+    margin-bottom: 1em; /* Adds a blank line after every paragraph */
+    line-height: 1.5;   /* Improves readability */
+}
+
+/* Ensure Lists inside emails also have spacing */
+.email-body-main ul,
+.email-body-main ol {
+    margin-bottom: 1em;
+}
+
+/* Optional: Handling for specific Outlook/Word styles that might use divs instead of p */
+.email-body-main div {
+    min-height: 1.2em; /* Ensures empty lines are not collapsed to 0 height */
+}
