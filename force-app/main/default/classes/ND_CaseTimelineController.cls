@@ -659,13 +659,95 @@ public without sharing class ND_CaseTimelineController {
     
     private static String styleCodeBlocks(String html) {
         if (String.isBlank(html)) return html;
-        Pattern p = Pattern.compile('(?is)<code>(.*?)</code>'); Matcher m = p.matcher(html);
-        String result = html; Integer blockId = 0;
+        
+        Pattern p = Pattern.compile('(?is)<code>(.*?)</code>'); 
+        Matcher m = p.matcher(html);
+        String result = html; 
+        Integer blockId = 0;
+        
         while (m.find()) {
-            String codeContent = m.group(1); String fullMatch = m.group(0);
-            String[] lines = codeContent.split('\n'); String numberedCode = '';
-            for (Integer i = 0; i < lines.size(); i++) numberedCode += '<div class="code-line"><span class="line-num">' + (i + 1) + '</span><span class="line-content">' + lines[i] + '</span></div>';
-            result = result.replace(fullMatch, '<div class="code-wrapper"><textarea class="raw-code-storage" style="display:none;">' + codeContent + '</textarea><button class="copy-btn">Copy</button><code id="code-block-' + (blockId++) + '" class="numbered-code">' + numberedCode + '</code></div>');
+            String originalCode = m.group(1); 
+            String fullMatch = m.group(0);
+
+            if (originalCode.length() > 30000) {
+                 result = result.replace(fullMatch, '<div class="code-wrapper"><textarea class="raw-code-storage" style="display:none;">' + originalCode + '</textarea><button class="copy-btn">Copy</button><code id="code-block-' + (blockId++) + '" class="numbered-code"><div class="code-line"><i>(Code block too large)</i></div></code></div>');
+                 continue; 
+            }
+            
+            // 1. ESCAPE HTML
+            String styledCode = originalCode.replace('<', '&lt;').replace('>', '&gt;');
+            
+            // --- STEP 2: EXTRACT COMMENTS ---
+            // We use a specific pattern for block comments that MUST have a closing */
+            // We use a separate pattern for line comments
+            Map<String, String> commentMap = new Map<String, String>();
+            Integer commentIdx = 0;
+
+            // 2A. Block Comments /* ... */
+            // (?s) enables dot-matches-newline for this pattern
+            Pattern blockCommentPat = Pattern.compile('(?s)/\\*.*?\\*/');
+            Matcher blockMatcher = blockCommentPat.matcher(styledCode);
+            while (blockMatcher.find()) {
+                String match = blockMatcher.group();
+                String token = '###BLOCK_COMMENT_' + commentIdx + '###';
+                commentMap.put(token, match);
+                // We replace FIRST occurrence to avoid messing up identical comments
+                styledCode = styledCode.replaceFirst(Pattern.quote(match), token); 
+                commentIdx++;
+            }
+
+            // 2B. Line Comments // ...
+            // (?m) ensures ^ and $ match start/end of lines
+            Pattern lineCommentPat = Pattern.compile('(?m)//.*$');
+            Matcher lineMatcher = lineCommentPat.matcher(styledCode);
+            while (lineMatcher.find()) {
+                String match = lineMatcher.group();
+                String token = '###LINE_COMMENT_' + commentIdx + '###';
+                commentMap.put(token, match);
+                styledCode = styledCode.replaceFirst(Pattern.quote(match), token);
+                commentIdx++;
+            }
+
+            // --- STEP 3: MARK TAGS (Layer 1 - Blue) ---
+            styledCode = styledCode.replaceAll('(&lt;.*?&gt;)', '###TAG_START###$1###TAG_END###');
+
+            // --- STEP 4: HIGHLIGHT QUOTES (Layer 2 - Green #529766) ---
+// Matches: "..."  '...'  &quot;...&quot;  &#34;...&#34;  &#39;...&#39;  &apos;...&apos;
+// Also handles escaped quotes inside real strings.
+styledCode = styledCode.replaceAll(
+    '(?s)(&quot;.*?&quot;|&#34;.*?&#34;|&apos;.*?&apos;|&#39;.*?&#39;|"(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\')',
+    '<span style="color:#529766;">$1</span>'
+);
+            // --- STEP 5: HIGHLIGHT HEX CODES (Layer 3 - Red #BB0417) ---
+            // Matches #123456 or #123456;
+            // Negative lookbehind (?<!color:) prevents breaking the span we just added
+            styledCode = styledCode.replaceAll('(?<!color:)#[A-Fa-f0-9]{6};?', '<span style="color:#BB0417;">$0</span>');
+
+            // --- STEP 6: RESTORE TAGS (Apply Blue #0C5CAC) ---
+            styledCode = styledCode.replace('###TAG_START###', '<span style="color:#0C5CAC;">').replace('###TAG_END###', '</span>');
+
+            // --- STEP 7: RESTORE COMMENTS (Apply Red #BB0417) ---
+            // Restore Block comments
+            for (String token : commentMap.keySet()) {
+                if (token.contains('BLOCK_COMMENT')) {
+                     styledCode = styledCode.replace(token, '<span style="color:#BB0417;">' + commentMap.get(token) + '</span>');
+                }
+            }
+            // Restore Line comments
+            for (String token : commentMap.keySet()) {
+                if (token.contains('LINE_COMMENT')) {
+                     styledCode = styledCode.replace(token, '<span style="color:#BB0417;">' + commentMap.get(token) + '</span>');
+                }
+            }
+
+            // Final: Build Numbered Lines
+            List<String> lines = styledCode.split('\n'); 
+            String numberedCode = '';
+            for (Integer i = 0; i < lines.size(); i++) {
+                numberedCode += '<div class="code-line"><span class="line-num">' + (i + 1) + '</span><span class="line-content">' + lines[i] + '</span></div>';
+            }
+            
+            result = result.replace(fullMatch, '<div class="code-wrapper"><textarea class="raw-code-storage" style="display:none;">' + originalCode + '</textarea><button class="copy-btn">Copy</button><code id="code-block-' + (blockId++) + '" class="numbered-code">' + numberedCode + '</code></div>');
         }
         return result;
     }
