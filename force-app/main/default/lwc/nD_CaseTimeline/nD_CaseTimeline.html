@@ -107,6 +107,52 @@
                     month="short" day="2-digit" hour="2-digit" minute="2-digit">
                     </lightning-formatted-date-time>
                   </div>
+                  <template if:true={item.isEmailCategory}>
+                    <div style="position: relative;">
+                      <lightning-button-icon icon-name="utility:info" size="x-small" variant="bare"
+                        onclick={handleEmailInfoToggle} data-id={item.id} alternative-text="Email Info"
+                        class="slds-m-right_xx-small">
+                      </lightning-button-icon>
+                      <template if:true={item.showEmailInfo}>
+                        <section role="dialog" tabindex="-1" class="slds-popover slds-popover_panel slds-nubbin_top-right" 
+                          style="position: absolute; top: 100%; right: 0; margin-top: 0.5rem; min-width: 20rem; z-index: 7000;">
+                          <button class="slds-button slds-button_icon slds-button_icon-small slds-float_right slds-popover__close"
+                            title="Close" onclick={handleEmailInfoClose} data-id={item.id}>
+                            <lightning-icon icon-name="utility:close" alternative-text="Close" size="x-small"></lightning-icon>
+                            <span class="slds-assistive-text">Close</span>
+                          </button>
+                          <div class="slds-popover__body">
+                            <dl class="slds-list_horizontal slds-wrap">
+                              <template if:true={item.emailSubject}>
+                                <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Subject</dt>
+                                <dd class="slds-item_detail slds-truncate" style="margin-left: 0.5rem;">{item.emailSubject}</dd>
+                              </template>
+                              <template if:true={item.emailTo}>
+                                <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">To</dt>
+                                <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                    data-popover-to={item.id} lwc:dom="manual"></dd>
+                              </template>
+                              <template if:true={item.emailCc}>
+                                <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Cc</dt>
+                                <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                    data-popover-cc={item.id} lwc:dom="manual"></dd>
+                              </template>
+                              <template if:true={item.emailBcc}>
+                                <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Bcc</dt>
+                                <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                    data-popover-bcc={item.id} lwc:dom="manual"></dd>
+                              </template>
+                              <template if:true={item.emailFrom}>
+                                <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">From</dt>
+                                <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                    data-popover-from={item.id} lwc:dom="manual"></dd>
+                              </template>
+                            </dl>
+                          </div>
+                        </section>
+                      </template>
+                    </div>
+                  </template>
                   <lightning-button-icon icon-name="utility:new_window" size="x-small" variant="bare"
                   onclick={handleOpenRecord} data-record-id={item.id} alternative-text="Open Record">
                   </lightning-button-icon>
@@ -140,14 +186,42 @@
               </template>
               <template if:true={item.isExpanded}>
                 <div class="slds-m-top_small slds-p-top_small slds-border_top" style="position: relative;">
-                  <div class="slds-text-body_small slds-m-bottom_small">
-                    <span>
-                      From:
-                      <b>
-                        {item.author}
-                      </b>
-                    </span>
-                  </div>
+                  <template if:true={item.isEmailCategory}>
+                    <div class="slds-text-body_small slds-m-bottom_small">
+                      <div class="slds-m-bottom_xx-small">
+                        <span class="slds-text-color_weak">From: </span>
+                        <b>{item.author}</b>
+                      </div>
+                      <template if:true={item.emailTo}>
+                        <div class="slds-m-bottom_xx-small">
+                          <span class="slds-text-color_weak">To: </span>
+                          <span data-expanded-to={item.id} lwc:dom="manual"></span>
+                        </div>
+                      </template>
+                      <template if:true={item.emailCc}>
+                        <div class="slds-m-bottom_xx-small">
+                          <span class="slds-text-color_weak">Cc: </span>
+                          <span data-expanded-cc={item.id} lwc:dom="manual"></span>
+                        </div>
+                      </template>
+                      <template if:true={item.emailBcc}>
+                        <div class="slds-m-bottom_xx-small">
+                          <span class="slds-text-color_weak">Bcc: </span>
+                          <span data-expanded-bcc={item.id} lwc:dom="manual"></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template if:false={item.isEmailCategory}>
+                    <div class="slds-text-body_small slds-m-bottom_small">
+                      <span>
+                        From:
+                        <b>
+                          {item.author}
+                        </b>
+                      </span>
+                    </div>
+                  </template>
                   <div class="email-body-main" data-body-id={item.id} lwc:dom="manual">
                   </div>
                   <template if:true={item.hasHistory}>

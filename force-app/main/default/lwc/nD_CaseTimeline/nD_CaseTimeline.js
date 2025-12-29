@@ -268,6 +268,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             isPublicCategory: processedItem.category === 'Public',
             isInternalCategory: processedItem.category === 'Internal',
             isSystemCategory: processedItem.category === 'System',
+            showEmailInfo: false, // Initialize email info popover as closed
             // Icons
             expandIcon: 'utility:chevronright'
         };
@@ -525,6 +526,26 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                         bodyContainer.innerHTML = item.body;
                         this.attachEventListeners(bodyContainer);
                     }
+                    
+                    // Inject recipient HTML for expanded email view
+                    if (item.isEmailCategory) {
+                        const toContainer = this.template.querySelector(`[data-expanded-to="${item.id}"]`);
+                        if (toContainer && item.emailTo && !toContainer.innerHTML) {
+                            toContainer.innerHTML = item.emailTo;
+                            this.attachEventListeners(toContainer);
+                        }
+                        const ccContainer = this.template.querySelector(`[data-expanded-cc="${item.id}"]`);
+                        if (ccContainer && item.emailCc && !ccContainer.innerHTML) {
+                            ccContainer.innerHTML = item.emailCc;
+                            this.attachEventListeners(ccContainer);
+                        }
+                        const bccContainer = this.template.querySelector(`[data-expanded-bcc="${item.id}"]`);
+                        if (bccContainer && item.emailBcc && !bccContainer.innerHTML) {
+                            bccContainer.innerHTML = item.emailBcc;
+                            this.attachEventListeners(bccContainer);
+                        }
+                    }
+                    
                     if (item.historyExpanded && item.historyBody) {
                         const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
                         if (historyContainer && !historyContainer.innerHTML) {
@@ -552,6 +573,30 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                         });
                     }
                 }
+                
+                // 3. POPOVER - Inject recipient HTML when popover is visible
+                if (item.showEmailInfo && item.isEmailCategory) {
+                    const popoverToContainer = this.template.querySelector(`[data-popover-to="${item.id}"]`);
+                    if (popoverToContainer && item.emailTo && !popoverToContainer.innerHTML) {
+                        popoverToContainer.innerHTML = item.emailTo;
+                        this.attachEventListeners(popoverToContainer);
+                    }
+                    const popoverCcContainer = this.template.querySelector(`[data-popover-cc="${item.id}"]`);
+                    if (popoverCcContainer && item.emailCc && !popoverCcContainer.innerHTML) {
+                        popoverCcContainer.innerHTML = item.emailCc;
+                        this.attachEventListeners(popoverCcContainer);
+                    }
+                    const popoverBccContainer = this.template.querySelector(`[data-popover-bcc="${item.id}"]`);
+                    if (popoverBccContainer && item.emailBcc && !popoverBccContainer.innerHTML) {
+                        popoverBccContainer.innerHTML = item.emailBcc;
+                        this.attachEventListeners(popoverBccContainer);
+                    }
+                    const popoverFromContainer = this.template.querySelector(`[data-popover-from="${item.id}"]`);
+                    if (popoverFromContainer && item.emailFrom && !popoverFromContainer.innerHTML) {
+                        popoverFromContainer.innerHTML = item.emailFrom;
+                        this.attachEventListeners(popoverFromContainer);
+                    }
+                }
             });
         }
     }
@@ -561,6 +606,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
        container.querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', this.handleCopyCode.bind(this)));
        container.querySelectorAll('.image-preview-link').forEach(link => link.addEventListener('click', this.handleImagePreviewClick.bind(this)));
        container.querySelectorAll('.mention-link').forEach(link => link.addEventListener('click', this.handleMentionClick.bind(this)));
+       container.querySelectorAll('.email-recipient-link').forEach(link => link.addEventListener('click', this.handleRecipientClick.bind(this)));
     }
     
     handleCopyCode(event) {
@@ -615,6 +661,21 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this[NavigationMixin.Navigate]({
             type: 'standard__recordPage',
             attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' }
+        });
+    }
+
+    handleRecipientClick(event) {
+        event.preventDefault(); 
+        event.stopPropagation();
+        const recordId = event.currentTarget.dataset.recordId;
+        
+        // Navigate to the record - will open in subtab in console
+        this[NavigationMixin.Navigate]({
+            type: 'standard__recordPage',
+            attributes: { 
+                recordId: recordId, 
+                actionName: 'view' 
+            }
         });
     }
 
@@ -721,5 +782,33 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this.isLoading = true;
         this.configLoaded = false; // Force full config re-fetch
         this.init();
+    }
+
+    handleEmailInfoToggle(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const itemId = event.currentTarget.dataset.id;
+        
+        // Toggle the visibility by updating the item in allItems
+        this.allItems = this.allItems.map(item => {
+            if (item.id === itemId) {
+                return { ...item, showEmailInfo: !item.showEmailInfo };
+            }
+            return item;
+        });
+    }
+
+    handleEmailInfoClose(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        const itemId = event.currentTarget.dataset.id;
+        
+        // Close the popover
+        this.allItems = this.allItems.map(item => {
+            if (item.id === itemId) {
+                return { ...item, showEmailInfo: false };
+            }
+            return item;
+        });
     }
 }

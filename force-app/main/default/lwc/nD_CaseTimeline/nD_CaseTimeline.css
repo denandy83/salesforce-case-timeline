@@ -241,3 +241,38 @@ lightning-formatted-rich-text img {
 .email-body-main div {
     min-height: 1.2em; /* Ensures empty lines are not collapsed to 0 height */
 }
+
+/* Email Info Popover Styling */
+.slds-popover_panel {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.slds-popover__body dl.slds-list_horizontal {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.5rem;
+    align-items: start;
+}
+
+.slds-popover__body .slds-item_label {
+    font-weight: 600;
+    padding-top: 0.125rem;
+}
+
+.slds-popover__body .slds-item_detail {
+    word-wrap: break-word;
+    white-space: normal;
+}
+
+/* Email Recipient Links */
+.email-recipient-link {
+    color: #0176d3 !important;
+    text-decoration: none !important;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.email-recipient-link:hover {
+    text-decoration: underline !important;
+    color: #014486 !important;
+}

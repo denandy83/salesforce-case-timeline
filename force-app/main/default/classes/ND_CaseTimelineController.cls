@@ -14,6 +14,11 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public Boolean historyExpanded = false;
         @AuraEnabled public String recordUrl;
         @AuraEnabled public String attachmentsHtml; // Dedicated field for attachments
+        @AuraEnabled public String emailTo; // Email To addresses
+        @AuraEnabled public String emailCc; // Email CC addresses
+        @AuraEnabled public String emailBcc; // Email BCC addresses
+        @AuraEnabled public String emailFrom; // Email From address
+        @AuraEnabled public String emailSubject; // Email Subject for info popover
 
         public Integer compareTo(Object compareTo) {
             TimelineItem other = (TimelineItem) compareTo;
@@ -134,7 +139,8 @@ public without sharing class ND_CaseTimelineController {
         if (beforeDate == null) beforeDate = DateTime.now().addSeconds(1);
 
         List<EmailMessage> emailCandidates = [
-            SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, CreatedBy.Name, Incoming 
+            SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, 
+                   ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming 
             FROM EmailMessage 
             WHERE ParentId = :caseId 
             AND Status != '5' 
@@ -225,6 +231,26 @@ public without sharing class ND_CaseTimelineController {
         String baseUrl = getBaseUrl();
         String fileBaseUrl = getFileBaseUrl();
         
+        // NEW: Collect all email addresses from emails to lookup Salesforce records
+        Set<String> allEmailAddresses = new Set<String>();
+        for (EmailMessage em : emails) {
+            if (String.isNotBlank(em.ToAddress)) {
+                allEmailAddresses.addAll(extractEmailAddresses(em.ToAddress));
+            }
+            if (String.isNotBlank(em.CcAddress)) {
+                allEmailAddresses.addAll(extractEmailAddresses(em.CcAddress));
+            }
+            if (String.isNotBlank(em.BccAddress)) {
+                allEmailAddresses.addAll(extractEmailAddresses(em.BccAddress));
+            }
+            if (String.isNotBlank(em.FromAddress)) {
+                allEmailAddresses.addAll(extractEmailAddresses(em.FromAddress));
+            }
+        }
+        
+        // Build email-to-record map
+        Map<String, EmailRecordMatch> emailToRecordMap = buildEmailToRecordMap(allEmailAddresses);
+        
         Map<String, String> documentIdToVersionId = new Map<String, String>();
         Map<String, String> versionIdToDocumentId = new Map<String, String>();
         Map<String, String> docIdToTitle = new Map<String, String>();
@@ -293,6 +319,16 @@ public without sharing class ND_CaseTimelineController {
             item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
             item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
             item.recordUrl = '/' + em.Id;
+            
+            // Populate email recipient fields with Salesforce record links
+            item.emailTo = enrichEmailAddresses(em.ToAddress, emailToRecordMap);
+            item.emailCc = enrichEmailAddresses(em.CcAddress, emailToRecordMap);
+            item.emailBcc = enrichEmailAddresses(em.BccAddress, emailToRecordMap);
+            item.emailFrom = enrichEmailAddresses(
+                String.isNotBlank(em.FromAddress) ? em.FromAddress : em.FromName, 
+                emailToRecordMap
+            );
+            item.emailSubject = em.Subject;
 
             if (String.isNotBlank(em.HtmlBody)) item.body = em.HtmlBody; 
             else item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
@@ -750,5 +786,126 @@ styledCode = styledCode.replaceAll(
             result = result.replace(fullMatch, '<div class="code-wrapper"><textarea class="raw-code-storage" style="display:none;">' + originalCode + '</textarea><button class="copy-btn">Copy</button><code id="code-block-' + (blockId++) + '" class="numbered-code">' + numberedCode + '</code></div>');
         }
         return result;
+    }
+    
+    // --- EMAIL ENRICHMENT METHODS ---
+    
+    // Wrapper class to hold email-to-record matches
+    public class EmailRecordMatch {
+        public String recordId;
+        public String recordName;
+        public String recordType; // 'User', 'Contact', or 'Lead'
+        
+        public EmailRecordMatch(String recordId, String recordName, String recordType) {
+            this.recordId = recordId;
+            this.recordName = recordName;
+            this.recordType = recordType;
+        }
+    }
+    
+    // Extract individual email addresses from a comma-separated string
+    private static Set<String> extractEmailAddresses(String emailString) {
+        Set<String> emails = new Set<String>();
+        if (String.isBlank(emailString)) return emails;
+        
+        // Split by comma or semicolon
+        List<String> parts = emailString.split('[,;]');
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (String.isNotBlank(trimmed)) {
+                // Extract email from "Name <email@domain.com>" format
+                Pattern p = Pattern.compile('<([^>]+)>');
+                Matcher m = p.matcher(trimmed);
+                if (m.find()) {
+                    emails.add(m.group(1).toLowerCase());
+                } else {
+                    emails.add(trimmed.toLowerCase());
+                }
+            }
+        }
+        return emails;
+    }
+    
+    // Build a map of email addresses to Salesforce records
+    private static Map<String, EmailRecordMatch> buildEmailToRecordMap(Set<String> emailAddresses) {
+        Map<String, EmailRecordMatch> emailMap = new Map<String, EmailRecordMatch>();
+        if (emailAddresses.isEmpty()) return emailMap;
+        
+        // Query Contacts FIRST (highest priority)
+        try {
+            for (Contact c : [SELECT Id, Name, Email FROM Contact WHERE Email IN :emailAddresses]) {
+                if (String.isNotBlank(c.Email)) {
+                    emailMap.put(c.Email.toLowerCase(), new EmailRecordMatch(c.Id, c.Name, 'Contact'));
+                }
+            }
+        } catch (Exception e) {
+            System.debug('Error querying Contacts: ' + e.getMessage());
+        }
+        
+        // Query Users SECOND (only if not already found as Contact)
+        Set<String> remainingEmails = new Set<String>();
+        for (String email : emailAddresses) {
+            if (!emailMap.containsKey(email)) {
+                remainingEmails.add(email);
+            }
+        }
+        
+        if (!remainingEmails.isEmpty()) {
+            try {
+                for (User u : [SELECT Id, Name, Email FROM User WHERE Email IN :remainingEmails AND IsActive = true]) {
+                    if (String.isNotBlank(u.Email) && !emailMap.containsKey(u.Email.toLowerCase())) {
+                        emailMap.put(u.Email.toLowerCase(), new EmailRecordMatch(u.Id, u.Name, 'User'));
+                    }
+                }
+            } catch (Exception e) {
+                System.debug('Error querying Users: ' + e.getMessage());
+            }
+        }
+        
+        return emailMap;
+    }
+    
+    // Convert comma-separated email string to HTML with record links
+    private static String enrichEmailAddresses(String emailString, Map<String, EmailRecordMatch> emailMap) {
+        if (String.isBlank(emailString)) return '';
+        
+        List<String> enrichedParts = new List<String>();
+        List<String> parts = emailString.split('[,;]');
+        
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (String.isBlank(trimmed)) continue;
+            
+            String displayName = trimmed;
+            String emailAddr = trimmed;
+            
+            // Parse "Name <email@domain.com>" format
+            Pattern p = Pattern.compile('(.+?)<([^>]+)>');
+            Matcher m = p.matcher(trimmed);
+            if (m.find()) {
+                displayName = m.group(1).trim();
+                emailAddr = m.group(2).trim();
+            }
+            
+            String lookupEmail = emailAddr.toLowerCase();
+            
+            if (emailMap.containsKey(lookupEmail)) {
+                EmailRecordMatch match = emailMap.get(lookupEmail);
+                // Create clickable link with data attribute for navigation
+                enrichedParts.add(
+                    '<a href="/' + match.recordId + '" ' +
+                    'class="email-recipient-link" ' +
+                    'data-record-id="' + match.recordId + '" ' +
+                    'style="color:#0176d3; text-decoration:none;">' +
+                    (displayName.contains('@') ? match.recordName : displayName) +
+                    '</a>'
+                );
+            } else {
+                // No match found, just display the text
+                enrichedParts.add(trimmed);
+            }
+        }
+        
+        return String.join(enrichedParts, ', ');
     }
 }
