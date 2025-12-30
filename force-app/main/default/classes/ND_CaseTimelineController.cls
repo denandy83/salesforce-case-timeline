@@ -19,11 +19,20 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public String emailBcc; // Email BCC addresses
         @AuraEnabled public String emailFrom; // Email From address
         @AuraEnabled public String emailSubject; // Email Subject for info popover
+        
+        public String sortDir; // Not exposed to LWC, just for internal sorting
 
         public Integer compareTo(Object compareTo) {
             TimelineItem other = (TimelineItem) compareTo;
-            if (this.createdDate < other.createdDate) return 1;
-            if (this.createdDate > other.createdDate) return -1;
+            // DESC: newer items first (larger dates = -1)
+            // ASC: older items first (smaller dates = -1)
+            if (this.sortDir == 'asc') {
+                if (this.createdDate < other.createdDate) return -1;
+                if (this.createdDate > other.createdDate) return 1;
+            } else {
+                if (this.createdDate < other.createdDate) return 1;
+                if (this.createdDate > other.createdDate) return -1;
+            }
             return 0;
         }
     }
@@ -193,11 +202,20 @@ public without sharing class ND_CaseTimelineController {
         combinedRaw.addAll((List<SObject>)emailCandidates);
         combinedRaw.addAll((List<SObject>)feedCandidates);
 
+        if (debugMode) {
+            System.debug('Before merge - Email count: ' + emailCandidates.size() + ', Feed count: ' + feedCandidates.size());
+            System.debug('Creating wrappers with sortDirection: ' + sortDirection);
+        }
+
         List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
         for(SObject obj : combinedRaw) {
             wrappers.add(new RawItemWrapper(obj, sortDirection));
         }
         wrappers.sort();
+        
+        if (debugMode && wrappers.size() > 0) {
+            System.debug('After sort - First item date: ' + wrappers[0].sortDate + ', Last item date: ' + wrappers[wrappers.size()-1].sortDate);
+        }
 
         List<EmailMessage> finalEmails = new List<EmailMessage>();
         List<FeedItem> finalFeeds = new List<FeedItem>();
@@ -231,7 +249,7 @@ public without sharing class ND_CaseTimelineController {
             } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
         }
 
-        return processItems(finalEmails, finalFeeds, connectMap);
+        return processItems(finalEmails, finalFeeds, connectMap, sortDirection);
     }
 
     public class RawItemWrapper implements Comparable {
@@ -262,7 +280,7 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @TestVisible 
-    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap) {
+    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap, String sortDirection) {
         List<TimelineItem> combinedList = new List<TimelineItem>();
         Map<String, String> statusMap = getStatusMap();
         String baseUrl = getBaseUrl();
@@ -356,6 +374,7 @@ public without sharing class ND_CaseTimelineController {
             item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
             item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
             item.recordUrl = '/' + em.Id;
+            item.sortDir = sortDirection;
             
             // Populate email recipient fields with Salesforce record links
             item.emailTo = enrichEmailAddresses(em.ToAddress, emailToRecordMap);
@@ -411,6 +430,7 @@ public without sharing class ND_CaseTimelineController {
             item.hasHistory = false;
             item.recordUrl = '/' + soqlFeedItem.Id;
             item.attachmentsHtml = ''; // Initialize
+            item.sortDir = sortDirection;
 
             ConnectApi.FeedItem connectFeedItem = (connectMap != null) ? connectMap.get(soqlFeedItem.Id) : null;
 

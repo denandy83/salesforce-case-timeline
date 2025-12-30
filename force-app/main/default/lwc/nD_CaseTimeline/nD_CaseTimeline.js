@@ -190,6 +190,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         })
         .then(data => {
             console.log('Raw data received from Apex:', data ? data.length : 0, 'items');
+            if (data && data.length > 0) {
+                console.log('First 3 items from Apex:');
+                data.slice(0, 3).forEach((item, idx) => {
+                    console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
+                });
+            }
             // --- NEW: Calculate Duration & Show Toast ---
             if (startTime && this.showLoadTimeToast) {
                 const endTime = performance.now();
@@ -212,6 +218,10 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                 console.log('Processed items:', processed.length);
                 this.allItems = [...this.allItems, ...processed];
                 console.log('Total allItems after adding:', this.allItems.length);
+                console.log('First 3 items in allItems:');
+                this.allItems.slice(0, 3).forEach((item, idx) => {
+                    console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
+                });
             } else {
                 this.hasMoreItems = false;
             }
