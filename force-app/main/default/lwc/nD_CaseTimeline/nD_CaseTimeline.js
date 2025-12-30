@@ -79,6 +79,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.areAllExpanded = config.expandByDefault;
             this.previewLines = config.previewLines || 1;
             
+            // Set initial sort direction based on config (default: desc = newest first)
+            this.sortDirection = (config.newestFirst !== false) ? 'desc' : 'asc';
+            
             if (this.showLoadTimeToast) {
                 this.dispatchEvent(
                     new ShowToastEvent({
@@ -139,10 +142,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
 
     // --- DATA LOADING ---
     initialLoad() {
+        console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
         if (!this.recordId || !this.configLoaded) return;
         this.stopPolling();
         this.isLoading = true;
         this.allItems = []; 
+        console.log('Cleared allItems, sortDirection:', this.sortDirection);
         this.hasMoreItems = true;
         this.error = undefined;
         this.isNewDataAvailable = false;
@@ -150,6 +155,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         const startTime = performance.now();
         this.fetchData(null,startTime).then(() => {
             this.isLoading = false;
+            console.log('Initial load complete, allItems count:', this.allItems.length);
             setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
         });
     }
@@ -174,13 +180,16 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         });
     }
 
-    fetchData(beforeDate, startTime) {
+    fetchData(referenceDate, startTime) {
         return getTimelineData({ 
             caseId: this.recordId, 
-            beforeDate: beforeDate,
-            limitSize: this.batchSize 
+            referenceDate: referenceDate,
+            limitSize: this.batchSize,
+            sortDirection: this.sortDirection,
+            debugMode: this.debugMode
         })
         .then(data => {
+            console.log('Raw data received from Apex:', data ? data.length : 0, 'items');
             // --- NEW: Calculate Duration & Show Toast ---
             if (startTime && this.showLoadTimeToast) {
                 const endTime = performance.now();
@@ -200,7 +209,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             if (!data || data.length < this.batchSize) this.hasMoreItems = false; 
             if (data && data.length > 0) {
                 const processed = data.map(this.processItem.bind(this));
+                console.log('Processed items:', processed.length);
                 this.allItems = [...this.allItems, ...processed];
+                console.log('Total allItems after adding:', this.allItems.length);
             } else {
                 this.hasMoreItems = false;
             }
@@ -324,8 +335,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             /-{3,}\s*(Original|Forwarded)\s+Message\s*-{3,}/i,
             /(?:From:|<b>From:<\/b>)[\s\S]{1,300}?(?:Sent:|<b>Sent:<\/b>)/i,
             /From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)/i,
-            /Da\s*:.{1,100}?Inviato\s*:/i, // Italian: Da: ... Inviato:
             /De\s*:.{1,100}?Envoy.{1,100}?:/i,
+            /Da\s*:.{1,100}?Inviato\s*:/i, // Italian: Da: ... Inviato:
             ///<div class="gmail_quote">/i,
             /_{20,}/
         ];
@@ -700,11 +711,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             if (item.category === 'System' && this.showSystem) return true;
             return false;
         });
-        return [...result].sort((a, b) => {
-            const dateA = new Date(a.createdDate);
-            const dateB = new Date(b.createdDate);
-            return this.sortDirection === 'desc' ? dateB - dateA : dateA - dateB;
-        });
+        // No need to sort - data comes from server in the correct order
+        return result;
     }
 
     handleToggle(event) {
@@ -716,7 +724,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (name === 'system') this.showSystem = checked;
     }
 
-    handleSortToggle() { this.sortDirection = this.sortDirection === 'desc' ? 'asc' : 'desc'; }
+    handleSortToggle() {
+        const oldDirection = this.sortDirection;
+        this.sortDirection = this.sortDirection === 'desc' ? 'asc' : 'desc';
+        console.log('Sort toggled from', oldDirection, 'to', this.sortDirection);
+        // Reload data to get items in the new sort order
+        this.initialLoad();
+    }
     handleCollapseAll() { this.allItems = [...this.allItems.map(item => ({ ...item, historyExpanded: false }))]; }
     handleHistoryToggle(event) {
         event.preventDefault();

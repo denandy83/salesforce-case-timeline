@@ -45,6 +45,7 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public Boolean useToastForUpdates { get; set; }
         @AuraEnabled public Integer previewLines { get; set; }
         @AuraEnabled public String configName { get; set; }
+        @AuraEnabled public Boolean newestFirst { get; set; }
         
         public TimelineConfig() {
             this.batchSize = 10;
@@ -61,6 +62,7 @@ public without sharing class ND_CaseTimelineController {
             this.useToastForUpdates = false;
             this.previewLines = 1;
             this.configName = 'CC-001';
+            this.newestFirst = true; // Default to newest first (desc)
         }
     }
 
@@ -77,7 +79,8 @@ public without sharing class ND_CaseTimelineController {
                        Show_Internal_Default__c, Show_Public_Default__c, 
                        Show_Sytem_Default__c, Visible_Character_Limit__c,
                        Expand_by_default__c, Show_Attachments_Collapsed__c,
-                       Toast_for_new_data__c, Collapsed_Preview_Lines__c
+                       Toast_for_new_data__c, Collapsed_Preview_Lines__c,
+                       Newest_First__c
                 FROM Custom_Configuration__c 
                 WHERE Active__c = true 
                 AND OwnerId = :currentUserId 
@@ -102,7 +105,8 @@ public without sharing class ND_CaseTimelineController {
                     Show_Public_Default__c = true,
                     Show_Sytem_Default__c = false,
                     Debug_Mode__c = false,
-                    Loading_Times_Toast__c = false
+                    Loading_Times_Toast__c = false,
+                    Newest_First__c = true
                 );
                 insert dbConfig;
                 dbConfig = [SELECT Id, Name FROM Custom_Configuration__c WHERE Id = :dbConfig.Id];
@@ -125,7 +129,8 @@ public without sharing class ND_CaseTimelineController {
                 }
                 configWrapper.expandByDefault = dbConfig.Expand_by_default__c;
                 configWrapper.showAttachmentsCollapsed = dbConfig.Show_Attachments_Collapsed__c;
-                configWrapper.useToastForUpdates = dbConfig.Toast_for_new_data__c; 
+                configWrapper.useToastForUpdates = dbConfig.Toast_for_new_data__c;
+                configWrapper.newestFirst = (dbConfig.Newest_First__c != null) ? dbConfig.Newest_First__c : true;
             }
         } catch (Exception e) {
             System.debug('Error in getTimelineConfig: ' + e.getMessage());
@@ -134,32 +139,55 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @AuraEnabled
-    public static List<TimelineItem> getTimelineData(Id caseId, DateTime beforeDate, Integer limitSize) {
+    public static List<TimelineItem> getTimelineData(Id caseId, DateTime referenceDate, Integer limitSize, String sortDirection, Boolean debugMode) {
         if (limitSize == null || limitSize < 1) limitSize = 10;
-        if (beforeDate == null) beforeDate = DateTime.now().addSeconds(1);
+        if (String.isBlank(sortDirection)) sortDirection = 'desc';
+        if (debugMode == null) debugMode = false;
+        
+        // For DESC (newest first): use beforeDate logic (MessageDate < referenceDate)
+        // For ASC (oldest first): use afterDate logic (MessageDate > referenceDate)
+        DateTime queryDate = (referenceDate == null) ? 
+            (sortDirection == 'desc' ? DateTime.now().addSeconds(1) : DateTime.newInstance(1900, 1, 1)) : 
+            referenceDate;
+        
+        String emailOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
+        String feedOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
+        String operator = (sortDirection == 'asc') ? '>' : '<';
 
-        List<EmailMessage> emailCandidates = [
-            SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, 
-                   ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming 
-            FROM EmailMessage 
-            WHERE ParentId = :caseId 
-            AND Status != '5' 
-            AND MessageDate < :beforeDate
-            ORDER BY MessageDate DESC
-            LIMIT :limitSize
-        ];
+        String emailQuery = 'SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, ' +
+                           'ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming ' +
+                           'FROM EmailMessage ' +
+                           'WHERE ParentId = :caseId AND Status != \'5\' AND MessageDate ' + operator + ' :queryDate ' +
+                           'ORDER BY MessageDate ' + emailOrder + ' LIMIT :limitSize';
+        
+        if (debugMode) {
+            System.debug('Email Query: ' + emailQuery);
+            System.debug('Query Date: ' + queryDate);
+            System.debug('Sort Direction: ' + sortDirection);
+        }
 
-        List<FeedItem> feedCandidates = [
-            SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText,
-            (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges),
-            (SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content'))
-            FROM FeedItem 
-            WHERE ParentId = :caseId 
-            AND Type != 'EmailMessageEvent'
-            AND CreatedDate < :beforeDate 
-            ORDER BY CreatedDate DESC
-            LIMIT :limitSize
-        ];
+        List<EmailMessage> emailCandidates = Database.query(emailQuery);
+        
+        if (debugMode) {
+            System.debug('Email candidates found: ' + emailCandidates.size());
+        }
+
+        String feedQuery = 'SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText, ' +
+                          '(SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges), ' +
+                          '(SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN (\'InlineImage\', \'Content\')) ' +
+                          'FROM FeedItem ' +
+                          'WHERE ParentId = :caseId AND Type != \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate ' +
+                          'ORDER BY CreatedDate ' + feedOrder + ' LIMIT :limitSize';
+        
+        if (debugMode) {
+            System.debug('Feed Query: ' + feedQuery);
+        }
+
+        List<FeedItem> feedCandidates = Database.query(feedQuery);
+        
+        if (debugMode) {
+            System.debug('Feed candidates found: ' + feedCandidates.size());
+        }
 
         List<SObject> combinedRaw = new List<SObject>();
         combinedRaw.addAll((List<SObject>)emailCandidates);
@@ -167,7 +195,7 @@ public without sharing class ND_CaseTimelineController {
 
         List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
         for(SObject obj : combinedRaw) {
-            wrappers.add(new RawItemWrapper(obj));
+            wrappers.add(new RawItemWrapper(obj, sortDirection));
         }
         wrappers.sort();
 
@@ -209,17 +237,26 @@ public without sharing class ND_CaseTimelineController {
     public class RawItemWrapper implements Comparable {
         public SObject obj;
         public DateTime sortDate;
+        public String sortDir;
         
-        public RawItemWrapper(SObject o) {
+        public RawItemWrapper(SObject o, String sortDirection) {
             this.obj = o;
+            this.sortDir = (String.isBlank(sortDirection)) ? 'desc' : sortDirection;
             if (o instanceof EmailMessage) this.sortDate = ((EmailMessage)o).MessageDate;
             else this.sortDate = ((FeedItem)o).CreatedDate;
         }
         
         public Integer compareTo(Object compareTo) {
             RawItemWrapper other = (RawItemWrapper) compareTo;
-            if (this.sortDate < other.sortDate) return 1;
-            if (this.sortDate > other.sortDate) return -1;
+            // DESC: newer items first (larger dates = -1)
+            // ASC: older items first (smaller dates = -1)
+            if (this.sortDir == 'asc') {
+                if (this.sortDate < other.sortDate) return -1;
+                if (this.sortDate > other.sortDate) return 1;
+            } else {
+                if (this.sortDate < other.sortDate) return 1;
+                if (this.sortDate > other.sortDate) return -1;
+            }
             return 0;
         }
     }

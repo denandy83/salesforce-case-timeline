@@ -384,6 +384,20 @@
                 </div>
 
                 <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Newest First
+                    </label>
+                    <lightning-helptext content="If checked, timeline will default to showing newest items first. If unchecked, timeline will default to showing oldest items first.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Newest_First__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
                     <div class="slds-grid slds-grid_vertical-align-center">
                         <label class="slds-form-element__label slds-m-bottom_none">Use System Toast for Updates</label>
                         <lightning-helptext content="If checked, new data notifications will appear as a standard Salesforce toast. If unchecked, a custom reload button will appear on the timeline."></lightning-helptext>
