@@ -1,9 +1,12 @@
-import { LightningElement, api, track } from 'lwc';
+import { LightningElement, api, track, wire } from 'lwc'; // <--- Added 'wire'
 import { NavigationMixin } from 'lightning/navigation';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent'; 
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
 import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
 import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
+
+// --- NEW IMPORT FOR CONSOLE AWARENESS ---
+import { EnclosingTabId, getFocusedTabInfo } from 'lightning/platformWorkspaceApi';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -42,6 +45,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     visibleCharLimit = 1950; 
     expandByDefault = false;
 
+    // --- NEW WIRE: Get the ID of the tab this component lives in ---
+    @wire(EnclosingTabId) myTabId;
 
     @api 
     get recordId() { return this._recordId; }
@@ -50,12 +55,33 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (value && this.configLoaded) this.initialLoad(); 
     }
 
-    connectedCallback() {
+// --- LIFECYCLE HOOKS ---
+ connectedCallback() {
         if (this.recordId) this.init(); 
+
+        // 1. Listen for Browser Tab visibility changes (User comes back from Outlook/Slack)
+        // Note: We use an arrow function to keep 'this' context
+        document.addEventListener("visibilitychange", async () => {
+            if (document.visibilityState === 'visible') {
+                // Double check if we are also the focused Console tab
+                const isFocused = await this.isConsoleTabFocused();
+                if (isFocused) {
+                    console.log('Browser tab visible and Console tab focused. Refreshing...');
+                    this.checkServerForUpdates();
+                    this.startPolling();
+                }
+            }
+        });
+
+        // 2. Listen for Window Focus (User clicks on the window)
+        window.addEventListener('focus', async () => {
+             const isFocused = await this.isConsoleTabFocused();
+             if (isFocused) {
+                 this.checkServerForUpdates();
+                 this.startPolling();
+             }
+        });
     }
-
-    disconnectedCallback() { this.stopPolling(); }
-
     async init() {
         try {
             this.isLoading = true;
@@ -112,9 +138,24 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (this._pollingTimer) { clearInterval(this._pollingTimer); this._pollingTimer = null; }
     }
 
-    checkServerForUpdates() {
+    // --- UPDATED LOGIC HERE ---
+    async checkServerForUpdates() {
         if (!this.recordId || !this.lastRefreshDate) return;
         
+        // GATE 1: Browser Visibility Check
+        // If the user is looking at Excel, or a different Chrome tab, don't run.
+        if (document.hidden) {
+            return; 
+        }
+
+        // GATE 2: Console Tab Focus Check
+        // If the user is in Salesforce, but looking at a DIFFERENT Case tab, don't run.
+        const isFocused = await this.isConsoleTabFocused();
+        if (!isFocused) {
+            return;
+        }
+
+        // If we pass both checks, NOW we ask the server
         checkForNewItems({ caseId: this.recordId, lastCheckDate: this.lastRefreshDate })
         .then(hasNewData => {
             if (hasNewData) {
@@ -126,7 +167,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                             title: 'Update Available',
                             message: 'New data received. Refresh the case to see it!',
                             variant: 'info',
-                            mode: 'sticky' // 'sticky' ensures they see it until they dismiss it
+                            mode: 'dismissable' // 'sticky' ensures they see it until they dismiss it
                         })
                     );
                 } else {
@@ -138,6 +179,21 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                 this.stopPolling();
             }
         }).catch(console.error);
+    }
+
+    // --- NEW HELPER FUNCTION ---
+    async isConsoleTabFocused() {
+        // If we don't have a tab ID (e.g., standard navigation app, not console), assume true
+        if (!this.myTabId) return true; 
+
+        try {
+            const focusedTab = await getFocusedTabInfo();
+            // We match if the currently focused tab IS our tab, or IS our parent tab (subtab scenario)
+            return focusedTab.tabId === this.myTabId || focusedTab.parentTabId === this.myTabId;
+        } catch (error) {
+            // Fallback for non-console apps
+            return true;
+        }
     }
 
     // --- DATA LOADING ---
