@@ -65,7 +65,7 @@
     </template>
 
     <div class="slds-p-horizontal_medium slds-p-bottom_medium slds-scrollable_y"
-    style="height: 70vh; max-height: 800px;">
+    style="height: 70vh;">
       <template if:true={isLoading}>
         <div class="slds-align_absolute-center" style="min-height: 200px;">
           <lightning-spinner alternative-text="Loading..." size="medium">
@@ -152,6 +152,12 @@
                         </section>
                       </template>
                     </div>
+                  </template>
+                  <template if:true={item.isEmailMessage}>
+                    <lightning-button-icon icon-name="utility:reply_all" size="x-small" variant="bare"
+                      onclick={handleReplyAll} data-email-id={item.id} alternative-text="Reply All"
+                      class="slds-m-right_xx-small">
+                    </lightning-button-icon>
                   </template>
                   <lightning-button-icon icon-name="utility:new_window" size="x-small" variant="bare"
                   onclick={handleOpenRecord} data-record-id={item.id} alternative-text="Open Record">

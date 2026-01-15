@@ -1,12 +1,9 @@
-import { LightningElement, api, track, wire } from 'lwc'; // <--- Added 'wire'
+import { LightningElement, api, track } from 'lwc';
 import { NavigationMixin } from 'lightning/navigation';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent'; 
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
 import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
 import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
-
-// --- NEW IMPORT FOR CONSOLE AWARENESS ---
-import { EnclosingTabId, getFocusedTabInfo } from 'lightning/platformWorkspaceApi';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -45,8 +42,6 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     visibleCharLimit = 1950; 
     expandByDefault = false;
 
-    // --- NEW WIRE: Get the ID of the tab this component lives in ---
-    @wire(EnclosingTabId) myTabId;
 
     @api 
     get recordId() { return this._recordId; }
@@ -55,33 +50,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (value && this.configLoaded) this.initialLoad(); 
     }
 
-// --- LIFECYCLE HOOKS ---
- connectedCallback() {
-        if (this.recordId) this.init(); 
-
-        // 1. Listen for Browser Tab visibility changes (User comes back from Outlook/Slack)
-        // Note: We use an arrow function to keep 'this' context
-        document.addEventListener("visibilitychange", async () => {
-            if (document.visibilityState === 'visible') {
-                // Double check if we are also the focused Console tab
-                const isFocused = await this.isConsoleTabFocused();
-                if (isFocused) {
-                    console.log('Browser tab visible and Console tab focused. Refreshing...');
-                    this.checkServerForUpdates();
-                    this.startPolling();
-                }
-            }
-        });
-
-        // 2. Listen for Window Focus (User clicks on the window)
-        window.addEventListener('focus', async () => {
-             const isFocused = await this.isConsoleTabFocused();
-             if (isFocused) {
-                 this.checkServerForUpdates();
-                 this.startPolling();
-             }
-        });
+    connectedCallback() {
+        if (this.recordId) this.init();
     }
+
+    disconnectedCallback() { this.stopPolling(); }
+
     async init() {
         try {
             this.isLoading = true;
@@ -138,24 +112,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (this._pollingTimer) { clearInterval(this._pollingTimer); this._pollingTimer = null; }
     }
 
-    // --- UPDATED LOGIC HERE ---
-    async checkServerForUpdates() {
+    checkServerForUpdates() {
         if (!this.recordId || !this.lastRefreshDate) return;
         
-        // GATE 1: Browser Visibility Check
-        // If the user is looking at Excel, or a different Chrome tab, don't run.
-        if (document.hidden) {
-            return; 
-        }
-
-        // GATE 2: Console Tab Focus Check
-        // If the user is in Salesforce, but looking at a DIFFERENT Case tab, don't run.
-        const isFocused = await this.isConsoleTabFocused();
-        if (!isFocused) {
-            return;
-        }
-
-        // If we pass both checks, NOW we ask the server
         checkForNewItems({ caseId: this.recordId, lastCheckDate: this.lastRefreshDate })
         .then(hasNewData => {
             if (hasNewData) {
@@ -167,7 +126,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                             title: 'Update Available',
                             message: 'New data received. Refresh the case to see it!',
                             variant: 'info',
-                            mode: 'dismissable' // 'sticky' ensures they see it until they dismiss it
+                            mode: 'sticky' // 'sticky' ensures they see it until they dismiss it
                         })
                     );
                 } else {
@@ -178,32 +137,17 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                 // Stop polling in both cases to prevent repeated notifications
                 this.stopPolling();
             }
-        }).catch(console.error);
-    }
-
-    // --- NEW HELPER FUNCTION ---
-    async isConsoleTabFocused() {
-        // If we don't have a tab ID (e.g., standard navigation app, not console), assume true
-        if (!this.myTabId) return true; 
-
-        try {
-            const focusedTab = await getFocusedTabInfo();
-            // We match if the currently focused tab IS our tab, or IS our parent tab (subtab scenario)
-            return focusedTab.tabId === this.myTabId || focusedTab.parentTabId === this.myTabId;
-        } catch (error) {
-            // Fallback for non-console apps
-            return true;
-        }
+        }).catch(err => console.error(err));
     }
 
     // --- DATA LOADING ---
     initialLoad() {
-        console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
+        if(this.debugMode) console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
         if (!this.recordId || !this.configLoaded) return;
         this.stopPolling();
         this.isLoading = true;
         this.allItems = []; 
-        console.log('Cleared allItems, sortDirection:', this.sortDirection);
+        if(this.debugMode) console.log('Cleared allItems, sortDirection:', this.sortDirection);
         this.hasMoreItems = true;
         this.error = undefined;
         this.isNewDataAvailable = false;
@@ -211,7 +155,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         const startTime = performance.now();
         this.fetchData(null,startTime).then(() => {
             this.isLoading = false;
-            console.log('Initial load complete, allItems count:', this.allItems.length);
+            if(this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
             setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
         });
     }
@@ -245,11 +189,11 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             debugMode: this.debugMode
         })
         .then(data => {
-            console.log('Raw data received from Apex:', data ? data.length : 0, 'items');
+            if(this.debugMode) console.log('Raw data received from Apex:', data ? data.length : 0, 'items');
             if (data && data.length > 0) {
-                console.log('First 3 items from Apex:');
+                if(this.debugMode) console.log('First 3 items from Apex:');
                 data.slice(0, 3).forEach((item, idx) => {
-                    console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
+                    if(this.debugMode) console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
                 });
             }
             // --- NEW: Calculate Duration & Show Toast ---
@@ -271,12 +215,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             if (!data || data.length < this.batchSize) this.hasMoreItems = false; 
             if (data && data.length > 0) {
                 const processed = data.map(this.processItem.bind(this));
-                console.log('Processed items:', processed.length);
+                if(this.debugMode) console.log('Processed items:', processed.length);
                 this.allItems = [...this.allItems, ...processed];
-                console.log('Total allItems after adding:', this.allItems.length);
-                console.log('First 3 items in allItems:');
+                if(this.debugMode) console.log('Total allItems after adding:', this.allItems.length);
+                if(this.debugMode) console.log('First 3 items in allItems:');
                 this.allItems.slice(0, 3).forEach((item, idx) => {
-                    console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
+                    if(this.debugMode) console.log(`  [${idx}] ${item.createdDate} - ${item.title}`);
                 });
             } else {
                 this.hasMoreItems = false;
@@ -345,6 +289,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             isPublicCategory: processedItem.category === 'Public',
             isInternalCategory: processedItem.category === 'Internal',
             isSystemCategory: processedItem.category === 'System',
+            isEmailMessage: (processedItem.id || '').startsWith('02s'), // EmailMessage Id prefix
             showEmailInfo: false, // Initialize email info popover as closed
             // Icons
             expandIcon: 'utility:chevronright'
@@ -403,7 +348,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             /From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)/i,
             /De\s*:.{1,100}?Envoy.{1,100}?:/i,
             /Da\s*:.{1,100}?Inviato\s*:/i, // Italian: Da: ... Inviato:
-            ///<div class="gmail_quote">/i,
+            /De\s*:.{1,100}?Enviado\s*:/i,
+            /(?:De:|<b>De:<\/b>)[\s\S]{1,500}?(?:Enviado\s+el:|<b>Enviado\s+el:<\/b>)/i,
             /_{20,}/
         ];
 
@@ -591,6 +537,136 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             return item;
         });
         setTimeout(() => { this.renderedCallback(); }, 0);
+    }
+
+    handleReplyAll(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const emailMessageId = event.currentTarget.dataset.emailId;
+
+        this[NavigationMixin.Navigate]({
+            type: 'standard__quickAction',
+            attributes: {
+                apiName: 'EmailMessage._ReplyAll'
+            },
+            state: {
+                recordId: emailMessageId
+            }
+        });
+
+        // Fix email editor height after modal opens
+        this.fixEmailEditorHeight();
+    }
+
+    fixEmailEditorHeight() {
+        let attemptCount = 0;
+        let appliedElements = [];
+        
+        const fixAttempt = () => {
+            attemptCount++;
+            
+            const activeModal = document.querySelector('[role="dialog"].slds-modal.slds-fade-in-open');
+            
+            if (!activeModal) {
+                return;
+            }
+            
+            const aloha = activeModal.querySelector('.oneAlohaPage');
+            const iframe = aloha?.querySelector('iframe');
+            
+            if (iframe && iframe.offsetHeight > 0) {
+                const inQuickAction = !!activeModal.querySelector('.runtime_platform_actionsQuickActionWrapper');
+                
+                if (!inQuickAction) {
+                    return;
+                }
+                
+                const modalContainer = activeModal.querySelector('.slds-modal__container');
+                const modalContent = activeModal.querySelector('.slds-modal__content');
+                
+                if (modalContainer) {
+                    modalContainer.style.setProperty('height', '100vh', 'important');
+                    modalContainer.style.setProperty('max-height', '100vh', 'important');
+                    appliedElements.push({element: modalContainer, properties: ['height', 'max-height']});
+                }
+                
+                if (modalContent) {
+                    modalContent.style.setProperty('max-height', 'none', 'important');
+                    modalContent.style.setProperty('overflow-y', 'visible', 'important');
+                    appliedElements.push({element: modalContent, properties: ['max-height', 'overflow-y']});
+                }
+                
+                const modalHeight = activeModal.offsetHeight;
+                const alohaHeight = Math.floor(modalHeight * 0.50);
+                aloha.style.setProperty('height', alohaHeight + 'px', 'important');
+                iframe.style.setProperty('height', '100%', 'important');
+                appliedElements.push({element: aloha, properties: ['height']});
+                appliedElements.push({element: iframe, properties: ['height']});
+                
+                const forceAloha = aloha.querySelector('force-aloha-page');
+                if (forceAloha) {
+                    forceAloha.style.setProperty('height', '100%', 'important');
+                    forceAloha.style.setProperty('display', 'block', 'important');
+                    appliedElements.push({element: forceAloha, properties: ['height', 'display']});
+                }
+                
+                try {
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    const body = iframeDoc?.body;
+                    
+                    if (body) {
+                        iframeDoc.documentElement.style.setProperty('height', '100%', 'important');
+                        body.style.setProperty('height', '100%', 'important');
+                        body.style.setProperty('margin', '0', 'important');
+                        appliedElements.push({element: iframeDoc.documentElement, properties: ['height']});
+                        appliedElements.push({element: body, properties: ['height', 'margin']});
+                        
+                        const ckeEditor = iframeDoc.querySelector('.cke_chrome');
+                        const ckeContents = iframeDoc.querySelector('.cke_contents');
+                        
+                        if (ckeEditor && ckeContents) {
+                            const iframeHeight = iframe.offsetHeight;
+                            const editorHeight = Math.floor(iframeHeight * 0.95);
+                            const contentsHeight = Math.floor(iframeHeight * 0.85);
+                            
+                            ckeEditor.style.setProperty('height', editorHeight + 'px', 'important');
+                            ckeContents.style.setProperty('height', contentsHeight + 'px', 'important');
+                            appliedElements.push({element: ckeEditor, properties: ['height']});
+                            appliedElements.push({element: ckeContents, properties: ['height']});
+                        }
+                        
+                        this.setupModalCloseCleanup(activeModal, appliedElements);
+                    }
+                } catch (e) {
+                    console.warn('Could not access iframe content:', e.message);
+                }
+            } else if (attemptCount < 30) {
+                setTimeout(fixAttempt, 300);
+            }
+        };
+        
+        setTimeout(fixAttempt, 2000);
+    }
+
+    setupModalCloseCleanup(modal, appliedElements) {
+        const observer = new MutationObserver((mutations) => {
+            if (!modal.classList.contains('slds-fade-in-open')) {
+                appliedElements.forEach(({element, properties}) => {
+                    properties.forEach(prop => {
+                        if (element && element.style) {
+                            element.style.removeProperty(prop);
+                        }
+                    });
+                });
+                observer.disconnect();
+            }
+        });
+        
+        observer.observe(modal, {
+            attributes: true,
+            attributeFilter: ['class']
+        });
     }
 
     renderedCallback() {
@@ -793,42 +869,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     handleSortToggle() {
         const oldDirection = this.sortDirection;
         this.sortDirection = this.sortDirection === 'desc' ? 'asc' : 'desc';
-        console.log('Sort toggled from', oldDirection, 'to', this.sortDirection);
+        if(this.debugMode) console.log('Sort toggled from', oldDirection, 'to', this.sortDirection);
         // Reload data to get items in the new sort order
         this.initialLoad();
     }
-    handleCollapseAll() { this.allItems = [...this.allItems.map(item => ({ ...item, historyExpanded: false }))]; }
-    handleHistoryToggle(event) {
-        event.preventDefault();
-        const clickedId = event.currentTarget.dataset.id;
-        this.allItems = this.allItems.map(item => {
-            if (item.id === clickedId) { return { ...item, historyExpanded: !item.historyExpanded }; }
-            return item;
-        });
-    }
-    // 1. Toggle Expand/Collapse (Attached to the main box/title)
-    handleTitleClick(event) {
-        event.preventDefault();
-        const clickedId = event.currentTarget.dataset.recordId;
-        
-        this.allItems = this.allItems.map(item => {
-            if (item.id === clickedId) {
-                const isNowExpanded = !item.isExpanded;
-                return { 
-                    ...item, 
-                    isExpanded: isNowExpanded,
-                    expandIcon: isNowExpanded ? 'utility:chevrondown' : 'utility:chevronright'
-                };
-            }
-            return item;
-        });
-        
-        // Wait for render to inject HTML into the newly expanded body
-        setTimeout(() => { this.renderedCallback(); }, 0);
-    }
-    
-    // 2. Open Record (Attached to the 'New Window' icon)
-    handleOpenRecord(event) {
+
+handleOpenRecord(event) {
         // Prevent the click from bubbling up to the main box (which would toggle expand)
         event.preventDefault(); 
         event.stopPropagation(); 
