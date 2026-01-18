@@ -1,0 +1,8 @@
+{
+  "track_id": "fix_reply_all_error_20260117",
+  "type": "bug",
+  "status": "new",
+  "created_at": "2026-01-17T00:00:00Z",
+  "updated_at": "2026-01-17T00:00:00Z",
+  "description": "Fix 'Cannot specify Id in an insert call' error when using Quick Reply All"
+}
