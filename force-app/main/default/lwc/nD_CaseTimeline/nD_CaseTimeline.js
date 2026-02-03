@@ -274,6 +274,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         `;
 
         const hasComments = processedItem.comments && processedItem.comments.length > 0;
+        const commentCount = hasComments ? processedItem.comments.length : 0;
         const isInternal = processedItem.isInternal;
         const baseClass = 'slds-box slds-box_x-small';
         const internalClass = isInternal ? ' internal-note' : '';
@@ -303,6 +304,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             boxClass: boxClass,
             commentBoxClass: commentBoxClass,
             hasComments: hasComments,
+            commentCount: commentCount,
             emailBadgeClass: processedItem.isOutgoing 
                 ? 'slds-badge outgoing-email-badge'
                 : 'slds-badge slds-theme_success',
@@ -375,6 +377,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     findSplitIndex(html) {
         const patterns = [
             /On\s+[A-Za-z]{3}[\s\S]{0,200}?wrote:/i,
+            /(?:Op|<b>Op<\/b>)\s+[\s\S]{0,100}?\s+(?:schreef|<b>schreef<\/b>)\s+[\s\S]{0,200}?:/i,
+            /Op\s+[\s\S]{0,100}?\s+schreef\s+[\s\S]{0,200}?:/i,
             /-{3,}\s*(Original|Forwarded)\s+Message\s*-{3,}/i,
             /(?:From:|<b>From:<\/b>)[\s\S]{1,300}?(?:Sent:|<b>Sent:<\/b>)/i,
             /From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)/i,

@@ -289,7 +289,7 @@ lightning-formatted-rich-text img {
 
 /* Comment Thread Styling */
 .comment-container {
-    margin-left: 3rem; /* Indented */
+    margin-left: 1.5rem; /* Reduced indentation */
     margin-top: -1px;  /* Glued overlap */
     border-top-left-radius: 0 !important;
     border-top-right-radius: 0 !important;

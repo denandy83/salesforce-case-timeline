@@ -101,13 +101,18 @@
                       </strong>
                     </div>
                   </div>
-                  <div class="slds-grid slds-grid_vertical-align-center slds-shrink-none">
-                    <div class="slds-text-color_weak slds-text-body_small slds-m-right_small">
-                      <lightning-formatted-date-time value={item.createdDate} year="numeric"
-                      month="short" day="2-digit" hour="2-digit" minute="2-digit">
-                      </lightning-formatted-date-time>
-                    </div>
-                    <template if:true={item.isEmailCategory}>
+                                  <div class="slds-grid slds-grid_vertical-align-center slds-shrink-none">
+                                    <template if:true={item.hasComments}>
+                                      <div class="slds-m-right_small slds-grid slds-grid_vertical-align-center slds-text-color_weak" title={item.commentCount}>
+                                          <lightning-icon icon-name="utility:chat" size="xx-small" class="slds-m-right_xxx-small slds-text-color_weak"></lightning-icon>
+                                          <span class="slds-text-body_small"><b>{item.commentCount}</b></span>
+                                      </div>
+                                    </template>
+                                    <div class="slds-text-color_weak slds-text-body_small slds-m-right_small">
+                                      <lightning-formatted-date-time value={item.createdDate} year="numeric"
+                                      month="short" day="2-digit" hour="2-digit" minute="2-digit">
+                                      </lightning-formatted-date-time>
+                                    </div>                    <template if:true={item.isEmailCategory}>
                       <div style="position: relative;">
                         <lightning-button-icon icon-name="utility:info" size="x-small" variant="bare"
                           onclick={handleEmailInfoToggle} data-id={item.id} alternative-text="Email Info"
@@ -279,54 +284,54 @@
                   </div>
                 </template>
               </div>
-                                                        <template if:true={item.isExpanded}>
-                                                          <template if:true={item.feedItemId}>
-                                                            <div class={item.commentBoxClass}>
-                                                              <h3 class="slds-text-title_caps slds-text-color_weak slds-p-around_x-small slds-border_bottom slds-m-bottom_none">
-                                                                  <strong>Comments</strong>
-                                                              </h3>
-                                                              
-                                                              <template if:true={item.comments}>
-                                                                  <template for:each={item.comments} for:item="comment">
-                                                                    <div key={comment.id} class="slds-p-horizontal_small slds-p-vertical_x-small comment-item">
-                                                                      <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_xx-small">
-                                                                        <div class="slds-text-body_small slds-m-right_small"><b>{comment.author}</b></div>
-                                                                        <div class="slds-text-body_small slds-text-color_weak">
-                                                                          <lightning-formatted-date-time value={comment.createdDate} 
-                                                                            year="numeric" month="short" day="2-digit" 
-                                                                            hour="2-digit" minute="2-digit">
-                                                                          </lightning-formatted-date-time>
-                                                                        </div>
-                                                                      </div>
-                                                                      <div class="slds-text-longform">
-                                                                        <lightning-formatted-rich-text value={comment.body}></lightning-formatted-rich-text>
-                                                                      </div>
-                                                                    </div>
-                                                                  </template>
-                                                              </template>
-                                          
-                                                              <div class="slds-p-around_small slds-border_top">
-                                                                  <div class="slds-grid slds-grid_vertical-align-center">
-                                                                      <div class="slds-col slds-grow">
-                                                                          <lightning-input type="text" variant="label-hidden" 
-                                                                              placeholder="Write a comment..." 
-                                                                              data-id={item.id}
-                                                                              value={item.draftComment}
-                                                                              onchange={handleAddCommentChange}>
-                                                                          </lightning-input>
-                                                                      </div>
-                                                                      <div class="slds-col slds-no-flex slds-m-left_small">
-                                                                          <lightning-button label="Post" variant="brand" 
-                                                                              data-id={item.id}
-                                                                              onclick={handlePostComment}>
-                                                                          </lightning-button>
-                                                                      </div>
-                                                                  </div>
-                                                              </div>
-                                          
-                                                            </div>
-                                                          </template>
-                                                        </template>
+                                                                      <template if:true={item.isExpanded}>
+                                                                        <template if:true={item.comments}>
+                                                                          <div class={item.commentBoxClass}>
+                                                                            <h3 class="slds-text-title_caps slds-text-color_weak slds-p-around_x-small slds-border_bottom slds-m-bottom_none">
+                                                                                <strong>Comments</strong>
+                                                                            </h3>
+                                                                            
+                                                                            <template for:each={item.comments} for:item="comment">
+                                                                              <div key={comment.id} class="slds-p-horizontal_small slds-p-vertical_x-small comment-item">
+                                                                                <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_xx-small">
+                                                                                  <div class="slds-text-body_small slds-m-right_small"><b>{comment.author}</b></div>
+                                                                                  <div class="slds-text-body_small slds-text-color_weak">
+                                                                                    <lightning-formatted-date-time value={comment.createdDate} 
+                                                                                      year="numeric" month="short" day="2-digit" 
+                                                                                      hour="2-digit" minute="2-digit">
+                                                                                    </lightning-formatted-date-time>
+                                                                                  </div>
+                                                                                </div>
+                                                                                <div class="slds-text-longform">
+                                                                                  <lightning-formatted-rich-text value={comment.body}></lightning-formatted-rich-text>
+                                                                                </div>
+                                                                              </div>
+                                                                            </template>
+                                                        
+                                                                            <!-- FUTURE USE: Add Comment Section
+                                                                            <div class="slds-p-around_small slds-border_top">
+                                                                                <div class="slds-grid slds-grid_vertical-align-center">
+                                                                                    <div class="slds-col slds-grow">
+                                                                                        <lightning-input type="text" variant="label-hidden" 
+                                                                                            placeholder="Write a comment..." 
+                                                                                            data-id={item.id}
+                                                                                            value={item.draftComment}
+                                                                                            onchange={handleAddCommentChange}>
+                                                                                        </lightning-input>
+                                                                                    </div>
+                                                                                    <div class="slds-col slds-no-flex slds-m-left_small">
+                                                                                        <lightning-button label="Post" variant="brand" 
+                                                                                            data-id={item.id}
+                                                                                            onclick={handlePostComment}>
+                                                                                        </lightning-button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                            -->
+                                                        
+                                                                          </div>
+                                                                        </template>
+                                                                      </template>
             </div>
           </template>
         </template>
