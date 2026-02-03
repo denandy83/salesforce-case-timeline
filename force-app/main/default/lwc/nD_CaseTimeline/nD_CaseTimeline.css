@@ -288,8 +288,43 @@ lightning-formatted-rich-text img {
 }
 
 /* Comment Thread Styling */
-.comment-thread-container {
-    margin-left: 1rem;
-    padding-left: 1rem;
-    border-left: 2px solid #dddbda;
+.comment-container {
+    margin-left: 3rem; /* Indented */
+    margin-top: -1px;  /* Glued overlap */
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+    border-top: 1px solid #dddbda; /* Optional separator from main box */
+}
+
+/* Ensure individual comments share the background */
+.comment-item {
+    background-color: inherit !important;
+    border-top: 1px solid rgba(0,0,0,0.08); /* Subtle separator */
+}
+
+/* Remove border from the first comment so it flows from header */
+.comment-item:first-of-type {
+    border-top: none;
+}
+
+/* Remove extra space from the last comment */
+.comment-item:last-child {
+    margin-bottom: 0 !important;
+    padding-bottom: 0.25rem;
+}
+
+/* Remove paragraph margins to eliminate "newline" whitespace */
+.comment-item p {
+    margin-bottom: 0 !important;
+}
+
+/* Zebra striping - subtle dark overlay works on both white and yellow */
+.comment-item:nth-of-type(even) {
+    background-color: rgba(0, 0, 0, 0.03) !important; 
+}
+
+.main-item-glued {
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    margin-bottom: 0 !important;
 }

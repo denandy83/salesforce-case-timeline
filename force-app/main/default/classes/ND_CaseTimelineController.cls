@@ -20,6 +20,7 @@ public without sharing class ND_CaseTimelineController {
         @ AuraEnabled public String emailFrom; // Email From address
         @ AuraEnabled public String emailSubject; // Email Subject for info popover
         @ AuraEnabled public List<CommentItem> comments; // Comments on the feed item or email
+        @ AuraEnabled public String feedItemId; // The ID of the FeedItem to post comments to
         
         public String sortDir; // Not exposed to LWC, just for internal sorting
 
@@ -36,6 +37,12 @@ public without sharing class ND_CaseTimelineController {
             }
             return 0;
         }
+    }
+    
+    @AuraEnabled
+    public static void addComment(Id feedItemId, String commentBody) {
+        if (String.isBlank(feedItemId) || String.isBlank(commentBody)) return;
+        insert new FeedComment(FeedItemId = feedItemId, CommentBody = commentBody);
     }
     
     public class CommentItem {
@@ -492,6 +499,7 @@ public without sharing class ND_CaseTimelineController {
             // ATTACH COMMENTS (Emails)
             if (emailToFeedId.containsKey(em.Id)) {
                 Id feedId = emailToFeedId.get(em.Id);
+                item.feedItemId = feedId; // Set the target FeedItem ID for comments
                 if (commentsMap.containsKey(feedId)) {
                     item.comments = commentsMap.get(feedId);
                 }
@@ -508,6 +516,7 @@ public without sharing class ND_CaseTimelineController {
 
             TimelineItem item = new TimelineItem();
             item.id = soqlFeedItem.Id;
+            item.feedItemId = soqlFeedItem.Id; // The FeedItem IS the target
             item.createdDate = soqlFeedItem.CreatedDate;
             item.hasHistory = false;
             item.recordUrl = '/' + soqlFeedItem.Id;

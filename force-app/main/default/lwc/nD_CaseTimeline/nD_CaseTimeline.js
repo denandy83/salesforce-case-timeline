@@ -4,6 +4,7 @@ import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
 import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
 import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
+import addComment from '@salesforce/apex/ND_CaseTimelineController.addComment';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -272,6 +273,26 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             text-overflow: ellipsis;
         `;
 
+        const hasComments = processedItem.comments && processedItem.comments.length > 0;
+        const isInternal = processedItem.isInternal;
+        const baseClass = 'slds-box slds-box_x-small';
+        const internalClass = isInternal ? ' internal-note' : '';
+        
+        // Calculate initial box class based on default expansion
+        let boxClass = isInternal 
+            ? `${baseClass} slds-m-bottom_small${internalClass}`
+            : `${baseClass} slds-m-bottom_small`;
+
+        if (this.expandByDefault && hasComments) {
+             boxClass = isInternal 
+                ? `${baseClass} main-item-glued${internalClass}`
+                : `${baseClass} main-item-glued`;
+        }
+
+        const commentBoxClass = isInternal
+            ? `slds-box slds-box_x-small slds-m-bottom_small comment-container${internalClass}`
+            : `slds-box slds-box_x-small slds-m-bottom_small comment-container`;
+
         return {
             ...processedItem,
             isExpanded: this.expandByDefault,
@@ -279,9 +300,9 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             previewText: previewText,
             previewStyle: lineClampStyle,
             rowStyle: '',
-            boxClass: processedItem.isInternal 
-                ? 'slds-box slds-box_x-small slds-m-bottom_small internal-note'
-                : 'slds-box slds-box_x-small slds-m-bottom_small',
+            boxClass: boxClass,
+            commentBoxClass: commentBoxClass,
+            hasComments: hasComments,
             emailBadgeClass: processedItem.isOutgoing 
                 ? 'slds-badge outgoing-email-badge'
                 : 'slds-badge slds-theme_success',
@@ -294,6 +315,17 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             // Icons
             expandIcon: 'utility:chevronright'
         };
+    }
+    
+    getBoxClass(item, isExpanded) {
+        const baseClass = 'slds-box slds-box_x-small';
+        const internalClass = item.isInternal ? ' internal-note' : '';
+        
+        // If expanded and has comments, remove bottom margin/radius to glue
+        if (isExpanded && item.hasComments) {
+            return `${baseClass} main-item-glued${internalClass}`;
+        }
+        return `${baseClass} slds-m-bottom_small${internalClass}`;
     }
 
     // --- PARSING LOGIC ---
@@ -504,6 +536,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                 return { 
                     ...item, 
                     isExpanded: isNowExpanded,
+                    boxClass: this.getBoxClass(item, isNowExpanded),
                     expandIcon: isNowExpanded ? 'utility:chevrondown' : 'utility:chevronright'
                 };
             }
@@ -523,6 +556,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this.allItems = this.allItems.map(item => ({ 
             ...item, 
             isExpanded: this.areAllExpanded,
+            boxClass: this.getBoxClass(item, this.areAllExpanded),
             expandIcon: icon
         }));
         
@@ -937,5 +971,63 @@ handleOpenRecord(event) {
             }
             return item;
         });
+    }
+
+    handleAddCommentChange(event) {
+        const itemId = event.target.dataset.id;
+        const value = event.target.value;
+        this.allItems = this.allItems.map(item => {
+            if (item.id === itemId) {
+                return { ...item, draftComment: value };
+            }
+            return item;
+        });
+    }
+
+    handlePostComment(event) {
+        const itemId = event.target.dataset.id;
+        const item = this.allItems.find(i => i.id === itemId);
+        
+        if (!item || !item.draftComment || !item.draftComment.trim()) return;
+        
+        // If feedItemId is missing (e.g. for an email that has no mapped feed item yet), we can't post
+        if (!item.feedItemId) {
+            this.dispatchEvent(
+                new ShowToastEvent({
+                    title: 'Error',
+                    message: 'Cannot post comment: No associated Feed Item found.',
+                    variant: 'error'
+                })
+            );
+            return;
+        }
+
+        addComment({ feedItemId: item.feedItemId, commentBody: item.draftComment })
+            .then(() => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Success',
+                        message: 'Comment posted',
+                        variant: 'success'
+                    })
+                );
+                // Clear draft and refresh
+                this.allItems = this.allItems.map(i => {
+                    if (i.id === itemId) {
+                        return { ...i, draftComment: '' }; // Clear input
+                    }
+                    return i;
+                });
+                this.handleRefresh(); // Refresh to show new comment
+            })
+            .catch(error => {
+                this.dispatchEvent(
+                    new ShowToastEvent({
+                        title: 'Error posting comment',
+                        message: error.body ? error.body.message : error.message,
+                        variant: 'error'
+                    })
+                );
+            });
     }
 }
