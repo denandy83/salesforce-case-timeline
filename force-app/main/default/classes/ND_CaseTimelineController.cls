@@ -362,34 +362,7 @@ public without sharing class ND_CaseTimelineController {
         Set<String> contentDocIds = new Set<String>();
         Set<String> contentVersionIds = new Set<String>();
 
-        for (FeedItem cf : feedItems) {
-            if (cf.FeedAttachments != null && !cf.FeedAttachments.isEmpty()) {
-                for (FeedAttachment fa : cf.FeedAttachments) {
-                    String rId = (String)fa.RecordId;
-                    if ((fa.Type == 'InlineImage' || fa.Type == 'Content') && String.isNotBlank(rId)) {
-                        if (rId.startsWith('069')) contentDocIds.add(rId);
-                        else if (rId.startsWith('068')) contentVersionIds.add(rId);
-                    }
-                }
-            }
-        }
-
-        if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
-            try {
-                List<ContentVersion> versions = [SELECT Id, ContentDocumentId, Title, FileExtension
-                                                FROM ContentVersion 
-                                                WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds)
-                                                AND IsLatest = true];
-                for (ContentVersion cv : versions) {
-                    documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
-                    versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
-                    docIdToTitle.put(cv.ContentDocumentId, cv.Title); docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
-                    docIdToTitle.put(cv.Id, cv.Title); docIdToExtension.put(cv.Id, cv.FileExtension);
-                }
-            } catch (Exception e) { System.debug('ERROR querying ContentVersion: ' + e.getMessage()); }
-        }
-
-        // --- PREPARE COMMENTS ---
+        // PRE-CALCULATE FEED IDs FOR COMMENTS & SCANNING
         Set<Id> emailIds = new Set<Id>();
         for (EmailMessage em : emails) {
             emailIds.add(em.Id);
@@ -404,24 +377,98 @@ public without sharing class ND_CaseTimelineController {
                 }
             }
         }
-        
-        // 2. Collect all relevant Feed IDs
+
         Set<Id> allFeedIds = new Set<Id>();
         for (FeedItem fi : feedItems) allFeedIds.add(fi.Id);
         allFeedIds.addAll(emailToFeedId.values());
-        
-        // 3. Query Comments
-        Map<Id, List<CommentItem>> commentsMap = new Map<Id, List<CommentItem>>();
+
+        // QUERY COMMENTS EARLY
+        List<FeedComment> allComments = new List<FeedComment>();
         if (!allFeedIds.isEmpty()) {
-            for (FeedComment fc : [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name 
-                                   FROM FeedComment 
-                                   WHERE FeedItemId IN :allFeedIds 
-                                   ORDER BY CreatedDate ASC]) {
-                if (!commentsMap.containsKey(fc.FeedItemId)) {
-                    commentsMap.put(fc.FeedItemId, new List<CommentItem>());
-                }
-                commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, fc.CommentBody, fc.CreatedBy.Name, fc.CreatedDate));
+            allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name 
+                           FROM FeedComment 
+                           WHERE FeedItemId IN :allFeedIds 
+                           ORDER BY CreatedDate ASC];
+        }
+        
+        // Scan Comment Bodies for inline images
+        Pattern sfdcPattern = Pattern.compile('sfdc://([a-zA-Z0-9]{15,18})');
+        for (FeedComment fc : allComments) {
+            if (String.isNotBlank(fc.CommentBody)) {
+                Matcher m = sfdcPattern.matcher(fc.CommentBody);
+                while (m.find()) contentDocIds.add(m.group(1));
             }
+        }
+
+        // 1. Scan FeedAttachments
+        for (FeedItem cf : feedItems) {
+            if (cf.FeedAttachments != null && !cf.FeedAttachments.isEmpty()) {
+                for (FeedAttachment fa : cf.FeedAttachments) {
+                    String rId = (String)fa.RecordId;
+                    if ((fa.Type == 'InlineImage' || fa.Type == 'Content') && String.isNotBlank(rId)) {
+                        if (rId.startsWith('069')) contentDocIds.add(rId);
+                        else if (rId.startsWith('068')) contentVersionIds.add(rId);
+                    }
+                }
+            }
+        }
+        
+        // 2. Scan HTML Bodies for inline images (sfdc://069...)
+        // Pattern sfdcPattern is already defined above
+        
+        for (EmailMessage em : emails) {
+            if (String.isNotBlank(em.HtmlBody)) {
+                Matcher m = sfdcPattern.matcher(em.HtmlBody);
+                while (m.find()) {
+                    contentDocIds.add(m.group(1));
+                }
+            }
+        }
+        
+        for (FeedItem fi : feedItems) {
+            if (String.isNotBlank(fi.Body)) {
+                Matcher m = sfdcPattern.matcher(fi.Body);
+                while (m.find()) {
+                    contentDocIds.add(m.group(1));
+                }
+            }
+        }
+
+        if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
+            try {
+                List<ContentVersion> versions = [SELECT Id, ContentDocumentId, Title, FileExtension
+                                                FROM ContentVersion 
+                                                WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds)
+                                                AND IsLatest = true];
+                for (ContentVersion cv : versions) {
+                    documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
+                    // Also store 15-char ID for robust lookup
+                    if (String.valueOf(cv.ContentDocumentId).length() >= 15) {
+                        documentIdToVersionId.put(String.valueOf(cv.ContentDocumentId).substring(0, 15), cv.Id);
+                    }
+                    
+                    versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
+                    docIdToTitle.put(cv.ContentDocumentId, cv.Title); docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
+                    docIdToTitle.put(cv.Id, cv.Title); docIdToExtension.put(cv.Id, cv.FileExtension);
+                }
+            } catch (Exception e) { System.debug('ERROR querying ContentVersion: ' + e.getMessage()); }
+        }
+
+        // --- BUILD COMMENTS MAP (Applying image fix) ---
+        Map<Id, List<CommentItem>> commentsMap = new Map<Id, List<CommentItem>>();
+        for (FeedComment fc : allComments) {
+            if (!commentsMap.containsKey(fc.FeedItemId)) {
+                commentsMap.put(fc.FeedItemId, new List<CommentItem>());
+            }
+            
+            String processedBody = fc.CommentBody;
+            if (String.isNotBlank(processedBody)) {
+                processedBody = fixRelativeImageUrls(processedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
+                // Optional: cleanHtml or makeImagesClickable if needed
+                processedBody = makeImagesClickable(processedBody, versionIdToDocumentId);
+            }
+            
+            commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
         }
 
         // --- PROCESS EMAILS ---
@@ -467,7 +514,10 @@ public without sharing class ND_CaseTimelineController {
             );
             item.emailSubject = em.Subject;
 
-            if (String.isNotBlank(em.HtmlBody)) item.body = em.HtmlBody; 
+            if (String.isNotBlank(em.HtmlBody)) {
+                String processed = fixRelativeImageUrls(em.HtmlBody, baseUrl, fileBaseUrl, documentIdToVersionId);
+                item.body = makeImagesClickable(processed, versionIdToDocumentId);
+            } 
             else item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
             
             item.hasHistory = false; item.historyBody = ''; 
@@ -728,14 +778,38 @@ public without sharing class ND_CaseTimelineController {
     private static String fixRelativeImageUrls(String html, String baseUrl, String fileBaseUrl, Map<String, String> documentIdToVersionId) {
         if (String.isBlank(html)) return html;
         String result = html;
-        Pattern p0 = Pattern.compile('(?i)<img([^>]*?)src="sfdc://([^"]+)"');
+        // Handle both double and single quotes for sfdc:// links
+        Pattern p0 = Pattern.compile('(?i)<img([^>]*?)src=["\']sfdc://([^"\']+)["\']');
         Matcher m0 = p0.matcher(result);
         while (m0.find()) {
             String fullMatch = m0.group(); String beforeSrc = m0.group(1); String contentDocumentId = m0.group(2);
             String contentVersionId = documentIdToVersionId.get(contentDocumentId);
+            
+            System.debug('--- Image Fix Debug ---');
+            System.debug('Original Tag: ' + fullMatch);
+            System.debug('Extracted Doc ID: ' + contentDocumentId);
+            System.debug('Found Version ID: ' + contentVersionId);
+            
             String replacement = (String.isNotBlank(contentVersionId)) ? '<img' + beforeSrc + 'src="' + fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + contentVersionId + '&operationContext=CHATTER&contentId=' + contentDocumentId + '"' : fullMatch;
+            
+            System.debug('Replacement Tag: ' + replacement);
+            
             result = result.replace(fullMatch, replacement);
         }
+        
+        // Fix 2: Handle absolute servlet.ImageServer URLs (convert to relative)
+        // Matches: src="https://domain.../servlet/servlet.ImageServer?..." -> src="/servlet/servlet.ImageServer?..."
+        Pattern p2 = Pattern.compile('(?i)<img([^>]*?)src="https?://[^/]+(/servlet/servlet\\.ImageServer\\?[^"]+)"');
+        Matcher m2 = p2.matcher(result);
+        while (m2.find()) {
+            String fullMatch = m2.group();
+            String attrs = m2.group(1);
+            String relativePath = m2.group(2);
+            // Replace with relative URL to use current session/domain
+            String replacement = '<img' + attrs + 'src="' + relativePath + '"';
+            result = result.replace(fullMatch, replacement);
+        }
+
         if (String.isNotBlank(baseUrl)) {
             Pattern p1 = Pattern.compile('(?i)<img([^>]*?)src="(/sfc/[^"]+)"');
             Matcher m1 = p1.matcher(result);
