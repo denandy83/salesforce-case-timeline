@@ -6,6 +6,16 @@
     overflow-y: auto;
 }
 
+.timeline-container {
+    height: 70vh;
+}
+
+@media only screen and (max-width: 48em) {
+    .timeline-container {
+        height: 85vh;
+    }
+}
+
 /* Outgoing email badge styling */
 .outgoing-email-badge {
     background-color: #FFF8D6 !important;

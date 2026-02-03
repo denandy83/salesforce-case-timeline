@@ -346,7 +346,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             /-{3,}\s*(Original|Forwarded)\s+Message\s*-{3,}/i,
             /(?:From:|<b>From:<\/b>)[\s\S]{1,300}?(?:Sent:|<b>Sent:<\/b>)/i,
             /From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)/i,
-            /De\s*:.{1,100}?Envoy.{1,100}?:/i,
+            /(?:De|<b>De)(?:[\s\S]{0,50}?):[\s\S]{1,500}?(?:Envoy|<b>Envoy)(?:[\s\S]{0,50}?):/i,
             /Da\s*:.{1,100}?Inviato\s*:/i, // Italian: Da: ... Inviato:
             /De\s*:.{1,100}?Enviado\s*:/i,
             /(?:De:|<b>De:<\/b>)[\s\S]{1,500}?(?:Enviado\s+el:|<b>Enviado\s+el:<\/b>)/i,

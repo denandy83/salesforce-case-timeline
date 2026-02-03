@@ -498,6 +498,11 @@ public without sharing class ND_CaseTimelineController {
                 } else item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
             }
 
+            // Ensure plain text feed items (like those from screen flows) respect newlines
+            if (soqlFeedItem.IsRichText == false && String.isNotBlank(item.body)) {
+                item.body = item.body.replace('\n', '<br/>');
+            }
+
             combinedList.add(item);
         }
 
