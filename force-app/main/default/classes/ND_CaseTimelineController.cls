@@ -17,8 +17,9 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public String emailTo; // Email To addresses
         @AuraEnabled public String emailCc; // Email CC addresses
         @AuraEnabled public String emailBcc; // Email BCC addresses
-        @AuraEnabled public String emailFrom; // Email From address
-        @AuraEnabled public String emailSubject; // Email Subject for info popover
+        @ AuraEnabled public String emailFrom; // Email From address
+        @ AuraEnabled public String emailSubject; // Email Subject for info popover
+        @ AuraEnabled public List<CommentItem> comments; // Comments on the feed item or email
         
         public String sortDir; // Not exposed to LWC, just for internal sorting
 
@@ -34,6 +35,20 @@ public without sharing class ND_CaseTimelineController {
                 if (this.createdDate > other.createdDate) return -1;
             }
             return 0;
+        }
+    }
+    
+    public class CommentItem {
+        @ AuraEnabled public String id;
+        @ AuraEnabled public String body;
+        @ AuraEnabled public String author;
+        @ AuraEnabled public DateTime createdDate;
+        
+        public CommentItem(String id, String body, String author, DateTime createdDate) {
+            this.id = id;
+            this.body = body;
+            this.author = author;
+            this.createdDate = createdDate;
         }
     }
 
@@ -230,26 +245,52 @@ public without sharing class ND_CaseTimelineController {
 
         Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
         List<String> idsToEnrich = new List<String>();
+        Map<Id, Id> emailIdToFeedItemId = new Map<Id, Id>();
         
+        // 1. Add standard feed items to enrichment
         for (FeedItem fi : finalFeeds) {
             if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost') {
                 idsToEnrich.add(fi.Id);
+                if (debugMode) System.debug('Added to Enrichment (Standard): ' + fi.Id + ' (' + fi.Type + ')');
             }
+        }
+
+        // 2. Add EmailMessageEvent items (separately queried because they are excluded from finalFeeds)
+        List<FeedItem> emailEvents = Database.query(
+            'SELECT Id FROM FeedItem WHERE ParentId = :caseId AND Type = \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate LIMIT :limitSize'
+        );
+        for(FeedItem fi : emailEvents) {
+            idsToEnrich.add(fi.Id);
+            if (debugMode) System.debug('Added to Enrichment (EmailEvent): ' + fi.Id);
         }
 
         if (!idsToEnrich.isEmpty()) {
             try {
+                if (debugMode) System.debug('Enriching ' + idsToEnrich.size() + ' items via ConnectApi.');
                 List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, idsToEnrich);
                 for (ConnectApi.BatchResult result : results) {
                     if (result.isSuccess()) {
                         Object res = result.getResult();
-                        if (res instanceof ConnectApi.FeedItem) connectMap.put(((ConnectApi.FeedItem)res).id, (ConnectApi.FeedItem)res);
+                        if (res instanceof ConnectApi.FeedItem) {
+                            ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
+                            connectMap.put(cfi.id, cfi);
+                            
+                            // Extract Email Link
+                            if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
+                                if (debugMode) System.debug('Found Email Capability for ' + cfi.id + ' -> ' + cfi.capabilities.emailMessage.emailMessageId);
+                                emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
+                            } else {
+                                if (debugMode && idsToEnrich.contains(cfi.id)) System.debug('No Email Capability for ' + cfi.id);
+                            }
+                        }
+                    } else {
+                        if (debugMode) System.debug('ConnectApi Batch Error: ' + result.getErrorMessage());
                     }
                 }
             } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
         }
 
-        return processItems(finalEmails, finalFeeds, connectMap, sortDirection);
+        return processItems(finalEmails, finalFeeds, connectMap, emailIdToFeedItemId, sortDirection);
     }
 
     public class RawItemWrapper implements Comparable {
@@ -280,7 +321,7 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @TestVisible 
-    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap, String sortDirection) {
+    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap, Map<Id, Id> emailIdToFeedItemId, String sortDirection) {
         List<TimelineItem> combinedList = new List<TimelineItem>();
         Map<String, String> statusMap = getStatusMap();
         String baseUrl = getBaseUrl();
@@ -341,9 +382,42 @@ public without sharing class ND_CaseTimelineController {
             } catch (Exception e) { System.debug('ERROR querying ContentVersion: ' + e.getMessage()); }
         }
 
-        // --- PROCESS EMAILS ---
+        // --- PREPARE COMMENTS ---
         Set<Id> emailIds = new Set<Id>();
-        for (EmailMessage em : emails) emailIds.add(em.Id);
+        for (EmailMessage em : emails) {
+            emailIds.add(em.Id);
+        }
+        
+        // 1. Map Emails to Feed Items (Using robust ConnectApi map)
+        Map<Id, Id> emailToFeedId = new Map<Id, Id>();
+        if (emailIdToFeedItemId != null) {
+            for (Id emId : emailIdToFeedItemId.keySet()) {
+                if (emailIds.contains(emId)) {
+                    emailToFeedId.put(emId, emailIdToFeedItemId.get(emId));
+                }
+            }
+        }
+        
+        // 2. Collect all relevant Feed IDs
+        Set<Id> allFeedIds = new Set<Id>();
+        for (FeedItem fi : feedItems) allFeedIds.add(fi.Id);
+        allFeedIds.addAll(emailToFeedId.values());
+        
+        // 3. Query Comments
+        Map<Id, List<CommentItem>> commentsMap = new Map<Id, List<CommentItem>>();
+        if (!allFeedIds.isEmpty()) {
+            for (FeedComment fc : [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name 
+                                   FROM FeedComment 
+                                   WHERE FeedItemId IN :allFeedIds 
+                                   ORDER BY CreatedDate ASC]) {
+                if (!commentsMap.containsKey(fc.FeedItemId)) {
+                    commentsMap.put(fc.FeedItemId, new List<CommentItem>());
+                }
+                commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, fc.CommentBody, fc.CreatedBy.Name, fc.CreatedDate));
+            }
+        }
+
+        // --- PROCESS EMAILS ---
         
         Map<Id, List<ContentDocumentLink>> emailAttachments = new Map<Id, List<ContentDocumentLink>>();
         if (!emailIds.isEmpty()) {
@@ -415,6 +489,14 @@ public without sharing class ND_CaseTimelineController {
                 item.attachmentsHtml = '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
             }
 
+            // ATTACH COMMENTS (Emails)
+            if (emailToFeedId.containsKey(em.Id)) {
+                Id feedId = emailToFeedId.get(em.Id);
+                if (commentsMap.containsKey(feedId)) {
+                    item.comments = commentsMap.get(feedId);
+                }
+            }
+
             combinedList.add(item);
         }
 
@@ -431,6 +513,11 @@ public without sharing class ND_CaseTimelineController {
             item.recordUrl = '/' + soqlFeedItem.Id;
             item.attachmentsHtml = ''; // Initialize
             item.sortDir = sortDirection;
+            
+            // ATTACH COMMENTS (Feed Items)
+            if (commentsMap.containsKey(soqlFeedItem.Id)) {
+                item.comments = commentsMap.get(soqlFeedItem.Id);
+            }
 
             ConnectApi.FeedItem connectFeedItem = (connectMap != null) ? connectMap.get(soqlFeedItem.Id) : null;
 

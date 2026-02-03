@@ -275,6 +275,28 @@
                     <div class="email-attachments" data-attachments-id={item.id} lwc:dom="manual"></div>
                   </template>
 
+                  <template if:true={item.comments}>
+                    <div class="slds-m-top_small slds-border_top slds-p-top_small comment-thread-container">
+                        <div class="slds-text-title_caps slds-m-bottom_x-small slds-text-color_weak">Comments</div>
+                        <template for:each={item.comments} for:item="comment">
+                            <div key={comment.id} class="slds-p-around_small slds-m-bottom_small slds-theme_shade comment-item" style="border-radius: 4px;">
+                                <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_xx-small">
+                                    <div class="slds-text-body_small slds-m-right_small"><b>{comment.author}</b></div>
+                                    <div class="slds-text-body_small slds-text-color_weak">
+                                        <lightning-formatted-date-time value={comment.createdDate} 
+                                            year="numeric" month="short" day="2-digit" 
+                                            hour="2-digit" minute="2-digit">
+                                        </lightning-formatted-date-time>
+                                    </div>
+                                </div>
+                                <div class="slds-text-longform">
+                                    <lightning-formatted-rich-text value={comment.body}></lightning-formatted-rich-text>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                  </template>
+
                 </div>
               </template>
             </div>
