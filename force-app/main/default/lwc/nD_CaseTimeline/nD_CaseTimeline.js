@@ -171,23 +171,25 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (!this.hasMoreItems || this.isLoadingMore) return;
         const lastItem = this.allItems[this.allItems.length - 1];
         const lastDate = lastItem ? lastItem.createdDate : null;
+        const lastId = lastItem ? lastItem.id : null;
         
         const startTime = performance.now(); // Start Timer
 
         this.isLoadingMore = true;
-        this.fetchData(lastDate, startTime).then(() => { // Pass Timer
+        this.fetchData(lastDate, startTime, lastId).then(() => { // Pass Timer and ID
             this.isLoadingMore = false;
             setTimeout(() => { this.renderedCallback(); }, 0);
         });
     }
 
-    fetchData(referenceDate, startTime) {
+    fetchData(referenceDate, startTime, lastSeenId) {
         return getTimelineData({ 
             caseId: this.recordId, 
             referenceDate: referenceDate,
             limitSize: this.batchSize,
             sortDirection: this.sortDirection,
-            debugMode: this.debugMode
+            debugMode: this.debugMode,
+            lastSeenId: lastSeenId
         })
         .then(data => {
             if(this.debugMode) console.log('Raw data received from Apex:', data ? data.length : 0, 'items');

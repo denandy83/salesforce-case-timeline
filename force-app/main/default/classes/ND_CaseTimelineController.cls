@@ -170,64 +170,53 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @AuraEnabled
-    public static List<TimelineItem> getTimelineData(Id caseId, DateTime referenceDate, Integer limitSize, String sortDirection, Boolean debugMode) {
+    public static List<TimelineItem> getTimelineData(Id caseId, DateTime referenceDate, Integer limitSize, String sortDirection, Boolean debugMode, String lastSeenId) {
         if (limitSize == null || limitSize < 1) limitSize = 10;
         if (String.isBlank(sortDirection)) sortDirection = 'desc';
         if (debugMode == null) debugMode = false;
         
-        // For DESC (newest first): use beforeDate logic (MessageDate < referenceDate)
-        // For ASC (oldest first): use afterDate logic (MessageDate > referenceDate)
+        // Use inclusive operators to ensure we catch collisions
+        String operator = (sortDirection == 'asc') ? '>=' : '<=';
+        
         DateTime queryDate = (referenceDate == null) ? 
             (sortDirection == 'desc' ? DateTime.now().addSeconds(1) : DateTime.newInstance(1900, 1, 1)) : 
             referenceDate;
         
         String emailOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
         String feedOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
-        String operator = (sortDirection == 'asc') ? '>' : '<';
+        
+        // Fetch extra items to handle the boundary overlap
+        Integer queryLimit = limitSize + 10;
 
         String emailQuery = 'SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, ' +
                            'ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming ' +
                            'FROM EmailMessage ' +
                            'WHERE ParentId = :caseId AND Status != \'5\' AND MessageDate ' + operator + ' :queryDate ' +
-                           'ORDER BY MessageDate ' + emailOrder + ' LIMIT :limitSize';
+                           'ORDER BY MessageDate ' + emailOrder + ', Id ' + emailOrder + ' LIMIT :queryLimit';
         
         if (debugMode) {
             System.debug('Email Query: ' + emailQuery);
             System.debug('Query Date: ' + queryDate);
-            System.debug('Sort Direction: ' + sortDirection);
         }
 
         List<EmailMessage> emailCandidates = Database.query(emailQuery);
         
-        if (debugMode) {
-            System.debug('Email candidates found: ' + emailCandidates.size());
-        }
-
         String feedQuery = 'SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText, ' +
                           '(SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges), ' +
                           '(SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN (\'InlineImage\', \'Content\')) ' +
                           'FROM FeedItem ' +
                           'WHERE ParentId = :caseId AND Type != \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate ' +
-                          'ORDER BY CreatedDate ' + feedOrder + ' LIMIT :limitSize';
+                          'ORDER BY CreatedDate ' + feedOrder + ', Id ' + feedOrder + ' LIMIT :queryLimit';
         
         if (debugMode) {
             System.debug('Feed Query: ' + feedQuery);
         }
 
         List<FeedItem> feedCandidates = Database.query(feedQuery);
-        
-        if (debugMode) {
-            System.debug('Feed candidates found: ' + feedCandidates.size());
-        }
 
         List<SObject> combinedRaw = new List<SObject>();
         combinedRaw.addAll((List<SObject>)emailCandidates);
         combinedRaw.addAll((List<SObject>)feedCandidates);
-
-        if (debugMode) {
-            System.debug('Before merge - Email count: ' + emailCandidates.size() + ', Feed count: ' + feedCandidates.size());
-            System.debug('Creating wrappers with sortDirection: ' + sortDirection);
-        }
 
         List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
         for(SObject obj : combinedRaw) {
@@ -235,16 +224,26 @@ public without sharing class ND_CaseTimelineController {
         }
         wrappers.sort();
         
-        if (debugMode && wrappers.size() > 0) {
-            System.debug('After sort - First item date: ' + wrappers[0].sortDate + ', Last item date: ' + wrappers[wrappers.size()-1].sortDate);
-        }
-
         List<EmailMessage> finalEmails = new List<EmailMessage>();
         List<FeedItem> finalFeeds = new List<FeedItem>();
 
         Integer count = 0;
         for(RawItemWrapper w : wrappers) {
             if (count >= limitSize) break;
+            
+            // CURSOR LOGIC: Skip items we have already seen
+            if (referenceDate != null && w.sortDate == referenceDate && String.isNotBlank(lastSeenId)) {
+                if (sortDirection == 'desc') {
+                    // DESC: We want items (Date < Ref) OR (Date == Ref AND Id < LastId)
+                    // So if Id >= LastId, we have seen it (or it came before/at the cut-off).
+                    if ((String)w.obj.Id >= lastSeenId) continue;
+                } else {
+                    // ASC: We want items (Date > Ref) OR (Date == Ref AND Id > LastId)
+                    // So if Id <= LastId, we have seen it.
+                    if ((String)w.obj.Id <= lastSeenId) continue;
+                }
+            }
+            
             if (w.obj instanceof EmailMessage) finalEmails.add((EmailMessage)w.obj);
             else finalFeeds.add((FeedItem)w.obj);
             count++;
@@ -258,17 +257,17 @@ public without sharing class ND_CaseTimelineController {
         for (FeedItem fi : finalFeeds) {
             if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost') {
                 idsToEnrich.add(fi.Id);
-                if (debugMode) System.debug('Added to Enrichment (Standard): ' + fi.Id + ' (' + fi.Type + ')');
             }
         }
 
-        // 2. Add EmailMessageEvent items (separately queried because they are excluded from finalFeeds)
+        // 2. Add EmailMessageEvent items 
+        // Note: For EmailMessageEvents, we also need to be careful with pagination if they were the boundary, 
+        // but typically they are fetched ad-hoc here. We keep the original logic for simplicity unless deep paging hits them.
         List<FeedItem> emailEvents = Database.query(
             'SELECT Id FROM FeedItem WHERE ParentId = :caseId AND Type = \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate LIMIT :limitSize'
         );
         for(FeedItem fi : emailEvents) {
             idsToEnrich.add(fi.Id);
-            if (debugMode) System.debug('Added to Enrichment (EmailEvent): ' + fi.Id);
         }
 
         if (!idsToEnrich.isEmpty()) {
@@ -282,16 +281,10 @@ public without sharing class ND_CaseTimelineController {
                             ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
                             connectMap.put(cfi.id, cfi);
                             
-                            // Extract Email Link
                             if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
-                                if (debugMode) System.debug('Found Email Capability for ' + cfi.id + ' -> ' + cfi.capabilities.emailMessage.emailMessageId);
                                 emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
-                            } else {
-                                if (debugMode && idsToEnrich.contains(cfi.id)) System.debug('No Email Capability for ' + cfi.id);
                             }
                         }
-                    } else {
-                        if (debugMode) System.debug('ConnectApi Batch Error: ' + result.getErrorMessage());
                     }
                 }
             } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
@@ -319,9 +312,17 @@ public without sharing class ND_CaseTimelineController {
             if (this.sortDir == 'asc') {
                 if (this.sortDate < other.sortDate) return -1;
                 if (this.sortDate > other.sortDate) return 1;
+                
+                // Tie-breaker: ID ASC
+                if ((String)this.obj.Id < (String)other.obj.Id) return -1;
+                if ((String)this.obj.Id > (String)other.obj.Id) return 1;
             } else {
                 if (this.sortDate < other.sortDate) return 1;
                 if (this.sortDate > other.sortDate) return -1;
+                
+                // Tie-breaker: ID DESC
+                if ((String)this.obj.Id < (String)other.obj.Id) return 1;
+                if ((String)this.obj.Id > (String)other.obj.Id) return -1;
             }
             return 0;
         }
