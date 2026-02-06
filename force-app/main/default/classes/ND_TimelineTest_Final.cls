@@ -115,7 +115,7 @@ public class ND_TimelineTest_Final {
         Case c = [SELECT Id FROM Case LIMIT 1];
         
         Test.startTest();
-        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now().addDays(1), 20, 'desc', false);
+        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now().addDays(1), 20, 'desc', false, null);
         Test.stopTest();
 
         System.assert(items.size() >= 2, 'Should have at least an email and a feed item');
@@ -203,7 +203,7 @@ public class ND_TimelineTest_Final {
         insert atts;
         
         Test.startTest();
-        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now(), 10, 'desc', false);
+        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now(), 10, 'desc', false, null);
         Test.stopTest();
         
         for(ND_CaseTimelineController.TimelineItem i : items) {
