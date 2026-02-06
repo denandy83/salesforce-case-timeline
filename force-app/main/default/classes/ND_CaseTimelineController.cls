@@ -903,7 +903,26 @@ public without sharing class ND_CaseTimelineController {
         Map<String, String> tagMap = new Map<String, String>(); Integer tagIndex = 0;
         Pattern tagPattern = Pattern.compile('(?s)<[^>]+>'); Matcher tagMatcher = tagPattern.matcher(html);
         while (tagMatcher.find()) { String tag = tagMatcher.group(); String placeholder = '[[[[HTML_TAG_' + tagIndex + ']]]]'; tagMap.put(placeholder, tag); html = html.replace(tag, placeholder); tagIndex++; }
-        String tldList = 'com|org|net|edu|gov|mil|biz|info|io|co|uk|be|eu|de|fr|it|es|nl|ru|ch|se|no|dk|pl|cs|cz|gr|ie|hu|pt|ro|sk|fi|bg|hr|lt|lv|ee|ca|au|nz|us|in|jp|cn|kr|br|mx|za|il|ae';
+        
+        // 1. Protect Emails
+        Map<String, String> emailMap = new Map<String, String>(); Integer emailIndex = 0;
+        // Basic email regex: word chars, dots, dashes, percents, pluses before @, then domain chars after
+        Pattern emailPattern = Pattern.compile('(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b');
+        Matcher emailMatcher = emailPattern.matcher(html);
+        while (emailMatcher.find()) {
+            String email = emailMatcher.group();
+            String placeholder = '[[[[EMAIL_ADDRESS_' + emailIndex + ']]]]';
+            // We'll restore it as a mailto link
+            String replacement = '<a href="mailto:' + email + '" style="color:#0176d3; text-decoration:none;">' + email + '</a>';
+            emailMap.put(placeholder, replacement);
+            
+            // Replace FIRST occurrence to handle duplicates correctly without infinite loops in replaceAll
+            html = html.replaceFirst(Pattern.quote(email), placeholder);
+            emailIndex++;
+        }
+
+        String tldList = 'aero|app|dev|cloud|com|org|net|edu|gov|mil|biz|info|io|co|uk|be|eu|de|fr|it|es|nl|ru|ch|se|no|dk|pl|cs|cz|gr|ie|hu|pt|ro|sk|fi|bg|hr|lt|lv|ee|ca|au|nz|us|in|jp|cn|kr|br|mx|za|il|ae';
+        // Simplified URL pattern since emails are gone
         Pattern urlPattern = Pattern.compile('(?i)((?:https?://|www\\.)[^\\s<"\\x5B\\x5D]+|(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:' + tldList + ')(?:/[\\w.,@?^=%&:/~+#-]*)?)');
         Matcher urlMatcher = urlPattern.matcher(html);
         String result = ''; Integer lastEnd = 0;
@@ -922,6 +941,11 @@ public without sharing class ND_CaseTimelineController {
             lastEnd = urlMatcher.end();
         }
         result += html.substring(lastEnd);
+        
+        // Restore Emails
+        for (String placeholder : emailMap.keySet()) result = result.replace(placeholder, emailMap.get(placeholder));
+        
+        // Restore Tags
         for (String placeholder : tagMap.keySet()) result = result.replace(placeholder, tagMap.get(placeholder));
         return result;
     }
