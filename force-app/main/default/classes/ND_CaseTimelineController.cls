@@ -172,6 +172,7 @@ public without sharing class ND_CaseTimelineController {
     @AuraEnabled
     public static List<TimelineItem> getTimelineData(Id caseId, DateTime referenceDate, Integer limitSize, String sortDirection, Boolean debugMode, String lastSeenId) {
         if (limitSize == null || limitSize < 1) limitSize = 10;
+        if (limitSize > 50) limitSize = 50; // Cap at 50 for heap safety
         if (String.isBlank(sortDirection)) sortDirection = 'desc';
         if (debugMode == null) debugMode = false;
         
@@ -185,8 +186,9 @@ public without sharing class ND_CaseTimelineController {
         String emailOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
         String feedOrder = (sortDirection == 'asc') ? 'ASC' : 'DESC';
         
-        // Fetch extra items to handle the boundary overlap
-        Integer queryLimit = limitSize + 10;
+        // Fetch extra items to handle the boundary overlap and filtering.
+        // We increase the buffer significantly to handle cases with many items having identical timestamps.
+        Integer queryLimit = limitSize * 3;
 
         String emailQuery = 'SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, ' +
                            'ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming ' +
@@ -248,6 +250,10 @@ public without sharing class ND_CaseTimelineController {
             else finalFeeds.add((FeedItem)w.obj);
             count++;
         }
+        
+        // Memory optimization: Clear large raw lists before processing
+        combinedRaw = null;
+        wrappers = null;
 
         Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
         List<String> idsToEnrich = new List<String>();
@@ -273,16 +279,27 @@ public without sharing class ND_CaseTimelineController {
         if (!idsToEnrich.isEmpty()) {
             try {
                 if (debugMode) System.debug('Enriching ' + idsToEnrich.size() + ' items via ConnectApi.');
-                List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, idsToEnrich);
-                for (ConnectApi.BatchResult result : results) {
-                    if (result.isSuccess()) {
-                        Object res = result.getResult();
-                        if (res instanceof ConnectApi.FeedItem) {
-                            ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
-                            connectMap.put(cfi.id, cfi);
-                            
-                            if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
-                                emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
+                
+                // Chunk requests to avoid ConnectApi 100-item limit
+                Integer batchSizeConnect = 100;
+                for (Integer i = 0; i < idsToEnrich.size(); i += batchSizeConnect) {
+                    Integer endIndex = Math.min(i + batchSizeConnect, idsToEnrich.size());
+                    List<String> batchIds = new List<String>();
+                    for (Integer j = i; j < endIndex; j++) {
+                        batchIds.add(idsToEnrich[j]);
+                    }
+
+                    List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, batchIds);
+                    for (ConnectApi.BatchResult result : results) {
+                        if (result.isSuccess()) {
+                            Object res = result.getResult();
+                            if (res instanceof ConnectApi.FeedItem) {
+                                ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
+                                connectMap.put(cfi.id, cfi);
+                                
+                                if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
+                                    emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
+                                }
                             }
                         }
                     }

@@ -335,17 +335,13 @@
             </div>
           </template>
         </template>
-        <template if:true={hasMoreItems}>
-          <div class="slds-m-top_medium slds-align_absolute-center slds-m-bottom_large">
-            <template if:true={isLoadingMore}>
-              <lightning-spinner alternative-text="Loading..." size="small">
-              </lightning-spinner>
-            </template>
-            <template if:false={isLoadingMore}>
-              <lightning-button label="Load More" onclick={handleLoadMore} variant="brand-outline">
-              </lightning-button>
-            </template>
-          </div>
+        <!-- Sentinel element for Infinite Scrolling -->
+        <div if:true={hasMoreItems} class="infinite-scroll-sentinel" lwc:dom="manual" style="height: 10px;"></div>
+        
+        <template if:true={isLoadingMore}>
+            <div class="slds-p-vertical_small slds-align_absolute-center">
+                <lightning-spinner alternative-text="Loading more..." size="small"></lightning-spinner>
+            </div>
         </template>
       </template>
     </div>

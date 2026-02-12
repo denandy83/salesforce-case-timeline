@@ -43,6 +43,11 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     visibleCharLimit = 1950; 
     expandByDefault = false;
 
+    lastRefreshDate; 
+    _pollingTimer;
+    _recordId;
+    _observer; // Infinite scroll observer
+
 
     @api 
     get recordId() { return this._recordId; }
@@ -55,7 +60,13 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (this.recordId) this.init();
     }
 
-    disconnectedCallback() { this.stopPolling(); }
+    disconnectedCallback() { 
+        this.stopPolling(); 
+        if (this._observer) {
+            this._observer.disconnect();
+            this._observer = null;
+        }
+    }
 
     async init() {
         try {
@@ -792,6 +803,25 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
                     }
                 }
             });
+        }
+        
+        // Setup Infinite Scrolling Observer
+        this.setupInfiniteScroll();
+    }
+    
+    setupInfiniteScroll() {
+        if (this._observer) {
+            this._observer.disconnect();
+        }
+
+        const sentinel = this.template.querySelector('.infinite-scroll-sentinel');
+        if (sentinel) {
+            this._observer = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting && this.hasMoreItems && !this.isLoadingMore && !this.isLoading) {
+                    this.handleLoadMore();
+                }
+            }, { threshold: 0.1 });
+            this._observer.observe(sentinel);
         }
     }
     
