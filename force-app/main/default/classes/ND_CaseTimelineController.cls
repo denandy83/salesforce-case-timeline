@@ -59,6 +59,63 @@ public without sharing class ND_CaseTimelineController {
         }
     }
 
+    public class TimelineCounts {
+        @AuraEnabled public Integer emailCount { get; set; }
+        @AuraEnabled public Integer internalCount { get; set; }
+        @AuraEnabled public Integer publicCount { get; set; }
+        @AuraEnabled public Integer systemCount { get; set; }
+        
+        public TimelineCounts() {
+            this.emailCount = 0;
+            this.internalCount = 0;
+            this.publicCount = 0;
+            this.systemCount = 0;
+        }
+    }
+
+    @AuraEnabled
+    public static TimelineCounts getTimelineCounts(Id caseId) {
+        TimelineCounts counts = new TimelineCounts();
+        if (caseId == null) return counts;
+        
+        // 1. Email Count
+        try {
+            counts.emailCount = [SELECT Count() FROM EmailMessage WHERE ParentId = :caseId AND Status != '5'];
+        } catch (Exception e) { System.debug('Error counting emails: ' + e.getMessage()); }
+        
+        // 2. Feed Items Count
+        // Note: FeedItem has severe SOQL restrictions (no 'Type NOT IN', no 'CreatedBy.Name' filter, no aggregates on some fields).
+        // Best approach is to fetch raw metadata (Limit 10000 for safety) and count in memory.
+        try {
+            List<String> systemTypes = new List<String>{'TrackedChange', 'CreateRecordEvent', 'ActivityEvent', 'CaseCommentPost', 'ChangeStatusPost', 'MilestoneEvent'};
+            Set<String> sysTypeSet = new Set<String>(systemTypes);
+            
+            List<FeedItem> feeds = [SELECT Type, Visibility, CreatedBy.Name 
+                                    FROM FeedItem 
+                                    WHERE ParentId = :caseId 
+                                    AND Type != 'EmailMessageEvent' 
+                                    LIMIT 10000];
+            
+            for (FeedItem fi : feeds) {
+                Boolean isSystem = false;
+                if (sysTypeSet.contains(fi.Type) || fi.CreatedBy.Name == 'Automated Process') {
+                    isSystem = true;
+                }
+                
+                if (isSystem) {
+                    counts.systemCount++;
+                } else if (fi.Visibility == 'AllUsers') {
+                    counts.publicCount++;
+                } else {
+                    counts.internalCount++;
+                }
+            }
+            
+        } catch (Exception e) { System.debug('Error counting feeds: ' + e.getMessage()); }
+        
+        return counts;
+    }
+
     // --- CONFIGURATION WRAPPER ---
     public class TimelineConfig {
         @AuraEnabled public String configId { get; set; } 

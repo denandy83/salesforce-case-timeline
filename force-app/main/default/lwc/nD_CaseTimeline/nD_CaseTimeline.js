@@ -4,11 +4,17 @@ import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 import getTimelineData from '@salesforce/apex/ND_CaseTimelineController.getTimelineData';
 import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkForNewItems';
 import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
+import getTimelineCounts from '@salesforce/apex/ND_CaseTimelineController.getTimelineCounts';
 import addComment from '@salesforce/apex/ND_CaseTimelineController.addComment';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
     
+    @track totalEmailCount = 0;
+    @track totalPublicCount = 0;
+    @track totalInternalCount = 0;
+    @track totalSystemCount = 0;
+
     @track showEmail = true;
     @track showPublic = true;
     @track showInternal = true;
@@ -71,13 +77,25 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     async init() {
         try {
             this.isLoading = true;
-            const config = await getTimelineConfig();
+            
+            // Fetch Config and Counts in parallel
+            const [config, counts] = await Promise.all([
+                getTimelineConfig(),
+                getTimelineCounts({ caseId: this.recordId })
+            ]);
+
             this.configId = config.configId;
             this.batchSize = config.batchSize || 10;
             this.pollingInterval = config.pollingInterval || 15000;
             this.debugMode = config.debugMode;
             this.showLoadTimeToast = config.showToast;
             
+            // Map Counts
+            this.totalEmailCount = counts.emailCount || 0;
+            this.totalInternalCount = counts.internalCount || 0;
+            this.totalPublicCount = counts.publicCount || 0;
+            this.totalSystemCount = counts.systemCount || 0;
+
             this.showEmail = config.defaultEmail;
             this.showPublic = config.defaultPublic;
             this.showInternal = config.defaultInternal;
@@ -189,6 +207,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this.isLoadingMore = true;
         this.fetchData(lastDate, startTime, lastId).then(() => { // Pass Timer and ID
             this.isLoadingMore = false;
+            if(this.debugMode) console.log('Infinite load complete, total allItems count:', this.allItems.length);
             setTimeout(() => { this.renderedCallback(); }, 0);
         });
     }
@@ -910,10 +929,10 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     get expandCollapseIcon() { return this.areAllExpanded ? 'utility:collapse_all' : 'utility:expand_all'; }
     
     get hasData() { return this.filteredData && this.filteredData.length > 0; }
-    get emailLabel() { return `Emails (${this.allItems.filter(i => i.category === 'Email').length})`; }
-    get publicLabel() { return `Public (${this.allItems.filter(i => i.category === 'Public').length})`; }
-    get internalLabel() { return `Internal (${this.allItems.filter(i => i.category === 'Internal').length})`; }
-    get systemLabel() { return `System (${this.allItems.filter(i => i.category === 'System').length})`; }
+    get emailLabel() { return `Emails (${this.totalEmailCount})`; }
+    get publicLabel() { return `Public (${this.totalPublicCount})`; }
+    get internalLabel() { return `Internal (${this.totalInternalCount})`; }
+    get systemLabel() { return `System (${this.totalSystemCount})`; }
 
     get filteredData() {
         let result = this.allItems.filter(item => {
