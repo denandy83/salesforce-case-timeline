@@ -402,71 +402,73 @@ public without sharing class ND_CaseTimelineController {
         }
     }
 
-    @TestVisible 
-    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap, Map<Id, Id> emailIdToFeedItemId, String sortDirection) {
-        List<TimelineItem> combinedList = new List<TimelineItem>();
-        Map<String, String> statusMap = getStatusMap();
-        String baseUrl = getBaseUrl();
-        String fileBaseUrl = getFileBaseUrl();
+    // --- REFACTORED PROCESS ITEMS ---
+    
+    public class Context {
+        public String baseUrl;
+        public String fileBaseUrl;
+        public Map<String, String> statusMap;
+        public String sortDirection;
+        public Map<Id, ConnectApi.FeedItem> connectMap;
+        public Map<Id, Id> emailIdToFeedItemId;
         
-        // NEW: Collect all email addresses from emails to lookup Salesforce records
-        Set<String> allEmailAddresses = new Set<String>();
-        for (EmailMessage em : emails) {
-            if (String.isNotBlank(em.ToAddress)) {
-                allEmailAddresses.addAll(extractEmailAddresses(em.ToAddress));
-            }
-            if (String.isNotBlank(em.CcAddress)) {
-                allEmailAddresses.addAll(extractEmailAddresses(em.CcAddress));
-            }
-            if (String.isNotBlank(em.BccAddress)) {
-                allEmailAddresses.addAll(extractEmailAddresses(em.BccAddress));
-            }
-            if (String.isNotBlank(em.FromAddress)) {
-                allEmailAddresses.addAll(extractEmailAddresses(em.FromAddress));
-            }
-        }
-        
-        // Build email-to-record map
-        Map<String, EmailRecordMatch> emailToRecordMap = buildEmailToRecordMap(allEmailAddresses);
-        
-        Map<String, String> documentIdToVersionId = new Map<String, String>();
-        Map<String, String> versionIdToDocumentId = new Map<String, String>();
-        Map<String, String> docIdToTitle = new Map<String, String>();
-        Map<String, String> docIdToExtension = new Map<String, String>();
-        
-        Set<String> contentDocIds = new Set<String>();
-        Set<String> contentVersionIds = new Set<String>();
+        public Map<String, EmailRecordMatch> emailToRecordMap;
+        public Map<String, String> documentIdToVersionId;
+        public Map<String, String> versionIdToDocumentId;
+        public Map<String, String> docIdToTitle;
+        public Map<String, String> docIdToExtension;
+        public Map<Id, List<CommentItem>> commentsMap;
+        public Map<Id, List<ContentDocumentLink>> emailAttachments;
+        public Map<Id, List<Attachment>> emailLegacyAttachments;
+    }
 
-        // PRE-CALCULATE FEED IDs FOR COMMENTS & SCANNING
+    @TestVisible
+    private static List<TimelineItem> processItems(List<EmailMessage> emails, List<FeedItem> feedItems, Map<Id, ConnectApi.FeedItem> connectMap, Map<Id, Id> emailIdToFeedItemId, String sortDirection) {
+        Context ctx = new Context();
+        ctx.baseUrl = getBaseUrl();
+        ctx.fileBaseUrl = getFileBaseUrl();
+        ctx.statusMap = getStatusMap();
+        ctx.sortDirection = sortDirection;
+        ctx.connectMap = connectMap;
+        ctx.emailIdToFeedItemId = emailIdToFeedItemId;
+
+        prepareContext(ctx, emails, feedItems);
+
+        List<TimelineItem> combinedList = new List<TimelineItem>();
+        combinedList.addAll(transformEmails(emails, ctx));
+        combinedList.addAll(transformFeedItems(feedItems, ctx));
+        combinedList.sort();
+        
+        return combinedList;
+    }
+
+    private static void prepareContext(Context ctx, List<EmailMessage> emails, List<FeedItem> feedItems) {
+        Set<String> allEmailAddresses = new Set<String>();
         Set<Id> emailIds = new Set<Id>();
         for (EmailMessage em : emails) {
             emailIds.add(em.Id);
+            if (String.isNotBlank(em.ToAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.ToAddress));
+            if (String.isNotBlank(em.CcAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.CcAddress));
+            if (String.isNotBlank(em.BccAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.BccAddress));
+            if (String.isNotBlank(em.FromAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.FromAddress));
         }
-        
-        // 1. Map Emails to Feed Items (Using robust ConnectApi map)
-        Map<Id, Id> emailToFeedId = new Map<Id, Id>();
-        if (emailIdToFeedItemId != null) {
-            for (Id emId : emailIdToFeedItemId.keySet()) {
-                if (emailIds.contains(emId)) {
-                    emailToFeedId.put(emId, emailIdToFeedItemId.get(emId));
-                }
+        ctx.emailToRecordMap = buildEmailToRecordMap(allEmailAddresses);
+
+        Set<String> contentDocIds = new Set<String>();
+        Set<String> contentVersionIds = new Set<String>();
+        Set<Id> allFeedIds = new Set<Id>();
+        for (FeedItem fi : feedItems) allFeedIds.add(fi.Id);
+        if (ctx.emailIdToFeedItemId != null) {
+            for (Id emId : ctx.emailIdToFeedItemId.keySet()) {
+                if (emailIds.contains(emId)) allFeedIds.add(ctx.emailIdToFeedItemId.get(emId));
             }
         }
 
-        Set<Id> allFeedIds = new Set<Id>();
-        for (FeedItem fi : feedItems) allFeedIds.add(fi.Id);
-        allFeedIds.addAll(emailToFeedId.values());
-
-        // QUERY COMMENTS EARLY
         List<FeedComment> allComments = new List<FeedComment>();
         if (!allFeedIds.isEmpty()) {
-            allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name 
-                           FROM FeedComment 
-                           WHERE FeedItemId IN :allFeedIds 
-                           ORDER BY CreatedDate ASC];
+            allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name FROM FeedComment WHERE FeedItemId IN :allFeedIds ORDER BY CreatedDate ASC];
         }
-        
-        // Scan Comment Bodies for inline images
+
         Pattern sfdcPattern = Pattern.compile('sfdc://([a-zA-Z0-9]{15,18})');
         for (FeedComment fc : allComments) {
             if (String.isNotBlank(fc.CommentBody)) {
@@ -474,10 +476,8 @@ public without sharing class ND_CaseTimelineController {
                 while (m.find()) contentDocIds.add(m.group(1));
             }
         }
-
-        // 1. Scan FeedAttachments
         for (FeedItem cf : feedItems) {
-            if (cf.FeedAttachments != null && !cf.FeedAttachments.isEmpty()) {
+            if (cf.FeedAttachments != null) {
                 for (FeedAttachment fa : cf.FeedAttachments) {
                     String rId = (String)fa.RecordId;
                     if ((fa.Type == 'InlineImage' || fa.Type == 'Content') && String.isNotBlank(rId)) {
@@ -486,175 +486,132 @@ public without sharing class ND_CaseTimelineController {
                     }
                 }
             }
+            if (String.isNotBlank(cf.Body)) {
+                Matcher m = sfdcPattern.matcher(cf.Body);
+                while (m.find()) contentDocIds.add(m.group(1));
+            }
         }
-        
-        // 2. Scan HTML Bodies for inline images (sfdc://069...)
-        // Pattern sfdcPattern is already defined above
-        
         for (EmailMessage em : emails) {
             if (String.isNotBlank(em.HtmlBody)) {
                 Matcher m = sfdcPattern.matcher(em.HtmlBody);
-                while (m.find()) {
-                    contentDocIds.add(m.group(1));
-                }
+                while (m.find()) contentDocIds.add(m.group(1));
             }
         }
-        
-        for (FeedItem fi : feedItems) {
-            if (String.isNotBlank(fi.Body)) {
-                Matcher m = sfdcPattern.matcher(fi.Body);
-                while (m.find()) {
-                    contentDocIds.add(m.group(1));
-                }
-            }
-        }
+
+        ctx.documentIdToVersionId = new Map<String, String>();
+        ctx.versionIdToDocumentId = new Map<String, String>();
+        ctx.docIdToTitle = new Map<String, String>();
+        ctx.docIdToExtension = new Map<String, String>();
 
         if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
-            try {
-                List<ContentVersion> versions = [SELECT Id, ContentDocumentId, Title, FileExtension
-                                                FROM ContentVersion 
-                                                WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds)
-                                                AND IsLatest = true];
-                for (ContentVersion cv : versions) {
-                    documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
-                    // Also store 15-char ID for robust lookup
-                    if (String.valueOf(cv.ContentDocumentId).length() >= 15) {
-                        documentIdToVersionId.put(String.valueOf(cv.ContentDocumentId).substring(0, 15), cv.Id);
-                    }
-                    
-                    versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
-                    docIdToTitle.put(cv.ContentDocumentId, cv.Title); docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
-                    docIdToTitle.put(cv.Id, cv.Title); docIdToExtension.put(cv.Id, cv.FileExtension);
+            for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds) AND IsLatest = true]) {
+                ctx.documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
+                if (String.valueOf(cv.ContentDocumentId).length() >= 15) {
+                    ctx.documentIdToVersionId.put(String.valueOf(cv.ContentDocumentId).substring(0, 15), cv.Id);
                 }
-            } catch (Exception e) { System.debug('ERROR querying ContentVersion: ' + e.getMessage()); }
+                ctx.versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
+                ctx.docIdToTitle.put(cv.ContentDocumentId, cv.Title);
+                ctx.docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
+                ctx.docIdToTitle.put(cv.Id, cv.Title);
+                ctx.docIdToExtension.put(cv.Id, cv.FileExtension);
+            }
         }
 
-        // --- BUILD COMMENTS MAP (Applying image fix) ---
-        Map<Id, List<CommentItem>> commentsMap = new Map<Id, List<CommentItem>>();
+        ctx.commentsMap = new Map<Id, List<CommentItem>>();
         for (FeedComment fc : allComments) {
-            if (!commentsMap.containsKey(fc.FeedItemId)) {
-                commentsMap.put(fc.FeedItemId, new List<CommentItem>());
-            }
-            
+            if (!ctx.commentsMap.containsKey(fc.FeedItemId)) ctx.commentsMap.put(fc.FeedItemId, new List<CommentItem>());
             String processedBody = fc.CommentBody;
             if (String.isNotBlank(processedBody)) {
-                processedBody = fixRelativeImageUrls(processedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                // Optional: cleanHtml or makeImagesClickable if needed
-                processedBody = makeImagesClickable(processedBody, versionIdToDocumentId);
+                processedBody = fixRelativeImageUrls(processedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                processedBody = makeImagesClickable(processedBody, ctx.versionIdToDocumentId);
             }
-            
-            commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
+            ctx.commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
         }
 
-        // --- PROCESS EMAILS ---
-        
-        Map<Id, List<ContentDocumentLink>> emailAttachments = new Map<Id, List<ContentDocumentLink>>();
+        ctx.emailAttachments = new Map<Id, List<ContentDocumentLink>>();
+        ctx.emailLegacyAttachments = new Map<Id, List<Attachment>>();
         if (!emailIds.isEmpty()) {
-            for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title, ContentDocument.FileExtension
-                                             FROM ContentDocumentLink 
-                                             WHERE LinkedEntityId IN :emailIds]) {
-                if (!emailAttachments.containsKey(link.LinkedEntityId)) emailAttachments.put(link.LinkedEntityId, new List<ContentDocumentLink>());
-                emailAttachments.get(link.LinkedEntityId).add(link);
+            for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title, ContentDocument.FileExtension FROM ContentDocumentLink WHERE LinkedEntityId IN :emailIds]) {
+                if (!ctx.emailAttachments.containsKey(link.LinkedEntityId)) ctx.emailAttachments.put(link.LinkedEntityId, new List<ContentDocumentLink>());
+                ctx.emailAttachments.get(link.LinkedEntityId).add(link);
+            }
+            for (Attachment att : [SELECT Id, Name, ParentId FROM Attachment WHERE ParentId IN :emailIds]) {
+                if (!ctx.emailLegacyAttachments.containsKey(att.ParentId)) ctx.emailLegacyAttachments.put(att.ParentId, new List<Attachment>());
+                ctx.emailLegacyAttachments.get(att.ParentId).add(att);
             }
         }
-        Map<Id, List<Attachment>> emailLegacyAttachments = new Map<Id, List<Attachment>>();
-        if (!emailIds.isEmpty()) {
-            // Query legacy Attachment object
-            for (Attachment att : [SELECT Id, Name, ParentId, ContentType FROM Attachment WHERE ParentId IN :emailIds]) {
-                if (!emailLegacyAttachments.containsKey(att.ParentId)) {
-                    emailLegacyAttachments.put(att.ParentId, new List<Attachment>());
-                }
-                emailLegacyAttachments.get(att.ParentId).add(att);
-            }
-        }
-        for(EmailMessage em : emails) {
+    }
+
+    private static List<TimelineItem> transformEmails(List<EmailMessage> emails, Context ctx) {
+        List<TimelineItem> results = new List<TimelineItem>();
+        for (EmailMessage em : emails) {
             TimelineItem item = new TimelineItem();
             item.id = em.Id;
             item.createdDate = em.MessageDate;
-            item.category = 'Email'; 
+            item.category = 'Email';
             item.isInternal = false;
             item.isOutgoing = (em.Incoming == false);
             item.title = (em.Subject != null) ? '✉️ ' + em.Subject : 'No Subject';
             item.author = (em.Incoming == false && em.CreatedBy != null) ? em.CreatedBy.Name : em.FromName;
             item.recordUrl = '/' + em.Id;
-            item.sortDir = sortDirection;
-            
-            // Populate email recipient fields with Salesforce record links
-            item.emailTo = enrichEmailAddresses(em.ToAddress, emailToRecordMap);
-            item.emailCc = enrichEmailAddresses(em.CcAddress, emailToRecordMap);
-            item.emailBcc = enrichEmailAddresses(em.BccAddress, emailToRecordMap);
-            item.emailFrom = enrichEmailAddresses(
-                String.isNotBlank(em.FromAddress) ? em.FromAddress : em.FromName, 
-                emailToRecordMap
-            );
+            item.sortDir = ctx.sortDirection;
+            item.emailTo = enrichEmailAddresses(em.ToAddress, ctx.emailToRecordMap);
+            item.emailCc = enrichEmailAddresses(em.CcAddress, ctx.emailToRecordMap);
+            item.emailBcc = enrichEmailAddresses(em.BccAddress, ctx.emailToRecordMap);
+            item.emailFrom = enrichEmailAddresses(String.isNotBlank(em.FromAddress) ? em.FromAddress : em.FromName, ctx.emailToRecordMap);
             item.emailSubject = em.Subject;
 
             if (String.isNotBlank(em.HtmlBody)) {
-                String processed = fixRelativeImageUrls(em.HtmlBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                item.body = makeImagesClickable(processed, versionIdToDocumentId);
-            } 
-            else item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
-            
-            item.hasHistory = false; item.historyBody = ''; 
-            item.attachmentsHtml = ''; // Initialize
-            List<String> attachmentCards = new List<String>();
-            if (emailAttachments.containsKey(em.Id)) {
-                for (ContentDocumentLink link : emailAttachments.get(em.Id)) {
-                    attachmentCards.add(getAttachmentCardHtml(link.ContentDocumentId, link.ContentDocument.Title, link.ContentDocument.FileExtension));
-                }
+                String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
+            } else {
+                item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
             }
 
-            // B. Add Legacy Attachments
-            if (emailLegacyAttachments.containsKey(em.Id)) {
-                for (Attachment att : emailLegacyAttachments.get(em.Id)) {
-                    // Extract extension from name (e.g. "invoice.pdf" -> "pdf")
-                    String ext = '';
-                    if (att.Name != null && att.Name.contains('.')) {
-                        ext = att.Name.substringAfterLast('.');
-                    }
-                    attachmentCards.add(getAttachmentCardHtml(att.Id, att.Name, ext));
+            List<String> cards = new List<String>();
+            if (ctx.emailAttachments.containsKey(em.Id)) {
+                for (ContentDocumentLink link : ctx.emailAttachments.get(em.Id)) {
+                    cards.add(getAttachmentCardHtml(link.ContentDocumentId, link.ContentDocument.Title, link.ContentDocument.FileExtension));
                 }
             }
-            
-            // Check if ANY attachments exist (File or Legacy)
-            if (!attachmentCards.isEmpty()) {
-                item.attachmentsHtml = '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
-            }
-
-            // ATTACH COMMENTS (Emails)
-            if (emailToFeedId.containsKey(em.Id)) {
-                Id feedId = emailToFeedId.get(em.Id);
-                item.feedItemId = feedId; // Set the target FeedItem ID for comments
-                if (commentsMap.containsKey(feedId)) {
-                    item.comments = commentsMap.get(feedId);
+            if (ctx.emailLegacyAttachments.containsKey(em.Id)) {
+                for (Attachment att : ctx.emailLegacyAttachments.get(em.Id)) {
+                    String ext = (att.Name != null && att.Name.contains('.')) ? att.Name.substringAfterLast('.') : '';
+                    cards.add(getAttachmentCardHtml(att.Id, att.Name, ext));
                 }
             }
+            item.attachmentsHtml = (!cards.isEmpty()) ? '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(cards, '') + '</div>' : '';
+            item.hasHistory = false;
+            item.historyBody = '';
 
-            combinedList.add(item);
+            if (ctx.emailIdToFeedItemId != null && ctx.emailIdToFeedItemId.containsKey(em.Id)) {
+                Id feedId = ctx.emailIdToFeedItemId.get(em.Id);
+                item.feedItemId = feedId;
+                if (ctx.commentsMap.containsKey(feedId)) item.comments = ctx.commentsMap.get(feedId);
+            }
+            results.add(item);
         }
+        return results;
+    }
 
-        // --- PROCESS FEED ITEMS ---
-        for (FeedItem soqlFeedItem : feedItems) {
-            
+    private static List<TimelineItem> transformFeedItems(List<FeedItem> feeds, Context ctx) {
+        List<TimelineItem> results = new List<TimelineItem>();
+        for (FeedItem soqlFeedItem : feeds) {
             if (soqlFeedItem.Status == 'Draft') continue;
             if (soqlFeedItem.Type == 'EmailMessageEvent') continue;
 
             TimelineItem item = new TimelineItem();
             item.id = soqlFeedItem.Id;
-            item.feedItemId = soqlFeedItem.Id; // The FeedItem IS the target
+            item.feedItemId = soqlFeedItem.Id;
             item.createdDate = soqlFeedItem.CreatedDate;
             item.hasHistory = false;
             item.recordUrl = '/' + soqlFeedItem.Id;
-            item.attachmentsHtml = ''; // Initialize
-            item.sortDir = sortDirection;
-            
-            // ATTACH COMMENTS (Feed Items)
-            if (commentsMap.containsKey(soqlFeedItem.Id)) {
-                item.comments = commentsMap.get(soqlFeedItem.Id);
-            }
+            item.attachmentsHtml = '';
+            item.sortDir = ctx.sortDirection;
 
-            ConnectApi.FeedItem connectFeedItem = (connectMap != null) ? connectMap.get(soqlFeedItem.Id) : null;
+            if (ctx.commentsMap.containsKey(soqlFeedItem.Id)) item.comments = ctx.commentsMap.get(soqlFeedItem.Id);
 
+            ConnectApi.FeedItem connectFeedItem = (ctx.connectMap != null) ? ctx.connectMap.get(soqlFeedItem.Id) : null;
             if (connectFeedItem != null && connectFeedItem.actor != null) item.author = connectFeedItem.actor.name;
             else item.author = (soqlFeedItem.CreatedBy != null) ? soqlFeedItem.CreatedBy.Name : 'System';
 
@@ -669,12 +626,18 @@ public without sharing class ND_CaseTimelineController {
                 item.category = 'Internal'; item.isInternal = true; item.title = '🔒 Internal Note';
             }
 
-            if (connectFeedItem != null) {
-                String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
+            String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
+            item.attachmentsHtml = getFeedAttachmentsHtml(soqlFeedItem, ctx.versionIdToDocumentId, ctx.docIdToTitle, ctx.docIdToExtension);
+
+            String parsedResult = null;
+            if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) parsedResult = parseFeedEventString(formattedBody, ctx.statusMap);
+
+            if (parsedResult != null) item.body = parsedResult;
+            else if (connectFeedItem != null) {
+                String processed = formattedBody;
                 Map<String, String> mentionReplacements = new Map<String, String>();
                 Map<String, String> mentionProtectionMap = new Map<String, String>();
                 Integer mentionIndex = 0;
-                
                 if (connectFeedItem.body != null && connectFeedItem.body.messageSegments != null) {
                     for (ConnectApi.MessageSegment segment : connectFeedItem.body.messageSegments) {
                         if (segment instanceof ConnectApi.MentionSegment) {
@@ -685,50 +648,27 @@ public without sharing class ND_CaseTimelineController {
                         }
                     }
                 }
-                for (String mentionText : mentionReplacements.keySet()) formattedBody = formattedBody.replace(mentionText, mentionReplacements.get(mentionText));
-                
-                String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                
-                // CHANGED: Use new helper to get attachments separately
-                item.attachmentsHtml = getFeedAttachmentsHtml(soqlFeedItem, versionIdToDocumentId, docIdToTitle, docIdToExtension);
-
-                String parsedResult = null;
-                if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) parsedResult = parseFeedEventString(formattedBody, statusMap);
-
-                if (parsedResult != null) item.body = parsedResult;
-                else if (String.isNotBlank(cleanBody)) {
+                for (String mentionText : mentionReplacements.keySet()) processed = processed.replace(mentionText, mentionReplacements.get(mentionText));
+                String cleanBody = fixRelativeImageUrls(processed, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                if (String.isNotBlank(cleanBody)) {
                     item.body = cleanHtml(cleanBody, true);
-                    item.body = makeImagesClickable(item.body, versionIdToDocumentId);
+                    item.body = makeImagesClickable(item.body, ctx.versionIdToDocumentId);
                     for (String placeholder : mentionProtectionMap.keySet()) item.body = item.body.replace(placeholder, mentionProtectionMap.get(placeholder));
                 } else item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
-            } 
-            else {
-                String formattedBody = soqlFeedItem.Body != null ? soqlFeedItem.Body : '';
-                String cleanBody = fixRelativeImageUrls(formattedBody, baseUrl, fileBaseUrl, documentIdToVersionId);
-                
-                // CHANGED: Use new helper to get attachments separately
-                item.attachmentsHtml = getFeedAttachmentsHtml(soqlFeedItem, versionIdToDocumentId, docIdToTitle, docIdToExtension);
-
-                String parsedResult = null;
-                if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) parsedResult = parseFeedEventString(formattedBody, statusMap);
-
-                if (parsedResult != null) item.body = parsedResult;
-                else if (soqlFeedItem.FeedTrackedChanges != null && !soqlFeedItem.FeedTrackedChanges.isEmpty() && String.isBlank(formattedBody)) item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, statusMap);
+            } else {
+                String cleanBody = fixRelativeImageUrls(formattedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                if (soqlFeedItem.FeedTrackedChanges != null && !soqlFeedItem.FeedTrackedChanges.isEmpty() && String.isBlank(formattedBody)) item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, ctx.statusMap);
                 else if (String.isNotBlank(cleanBody)) {
-                    item.body = cleanHtml(cleanBody, true); item.body = makeImagesClickable(item.body, versionIdToDocumentId);
+                    item.body = cleanHtml(cleanBody, true); item.body = makeImagesClickable(item.body, ctx.versionIdToDocumentId);
                 } else item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
             }
 
-            // Ensure plain text feed items (like those from screen flows) respect newlines
             if (soqlFeedItem.IsRichText == false && String.isNotBlank(item.body)) {
                 item.body = item.body.replace('\n', '<br/>');
             }
-
-            combinedList.add(item);
+            results.add(item);
         }
-
-        combinedList.sort();
-        return combinedList;
+        return results;
     }
 
     private static String getAttachmentCardHtml(String docId, String fileName, String fileExtension) {

@@ -49,9 +49,6 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     visibleCharLimit = 1950; 
     expandByDefault = false;
 
-    lastRefreshDate; 
-    _pollingTimer;
-    _recordId;
     _observer; // Infinite scroll observer
 
 
