@@ -415,7 +415,8 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             /Da\s*:.{1,100}?Inviato\s*:/i, // Italian: Da: ... Inviato:
             /De\s*:.{1,100}?Enviado\s*:/i,
             /(?:De:|<b>De:<\/b>)[\s\S]{1,500}?(?:Enviado\s+el:|<b>Enviado\s+el:<\/b>)/i,
-            /_{20,}/
+            /(?:Le|<b>Le)<\/b>?\s+[\s\S]{0,250}?(?:a\s+écrit|<b>a\s+écrit<\/b>)\s*:/i,
+            /_{20,}\s*[\r\n]+\s*(?:From|De|On|Le|Op|<b>)/i
         ];
 
         let bestIndex = -1;
