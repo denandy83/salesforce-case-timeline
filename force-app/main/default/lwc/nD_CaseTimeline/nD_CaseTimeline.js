@@ -737,94 +737,71 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     }
 
     renderedCallback() {
+        // Cache Busting Log
+        if (this.debugMode) console.log('Timeline Rendered - Cache Bust v1');
+
         if (this.filteredData && this.filteredData.length > 0) {
             this.filteredData.forEach(item => {
                 
-                // 1. EXPANDED VIEW (Always show attachments if expanded)
+                // 1. EXPANDED VIEW
                 if (item.isExpanded) {
                     const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
-                    if (bodyContainer && item.body && !bodyContainer.innerHTML) {
+                    if (bodyContainer && item.body && bodyContainer.dataset.rendered !== 'true') {
                         bodyContainer.innerHTML = item.body;
-                        this.attachEventListeners(bodyContainer);
+                        bodyContainer.dataset.rendered = 'true';
                     }
                     
-                    // Inject recipient HTML for expanded email view
+                    // Recipient HTML
                     if (item.isEmailCategory) {
-                        const toContainer = this.template.querySelector(`[data-expanded-to="${item.id}"]`);
-                        if (toContainer && item.emailTo && !toContainer.innerHTML) {
-                            toContainer.innerHTML = item.emailTo;
-                            this.attachEventListeners(toContainer);
-                        }
-                        const ccContainer = this.template.querySelector(`[data-expanded-cc="${item.id}"]`);
-                        if (ccContainer && item.emailCc && !ccContainer.innerHTML) {
-                            ccContainer.innerHTML = item.emailCc;
-                            this.attachEventListeners(ccContainer);
-                        }
-                        const bccContainer = this.template.querySelector(`[data-expanded-bcc="${item.id}"]`);
-                        if (bccContainer && item.emailBcc && !bccContainer.innerHTML) {
-                            bccContainer.innerHTML = item.emailBcc;
-                            this.attachEventListeners(bccContainer);
-                        }
+                        ['to', 'cc', 'bcc'].forEach(type => {
+                            const container = this.template.querySelector(`[data-expanded-${type}="${item.id}"]`);
+                            if (container && item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`] && container.dataset.rendered !== 'true') {
+                                container.innerHTML = item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`];
+                                container.dataset.rendered = 'true';
+                            }
+                        });
                     }
                     
                     if (item.historyExpanded && item.historyBody) {
                         const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
-                        if (historyContainer && !historyContainer.innerHTML) {
+                        if (historyContainer && historyContainer.dataset.rendered !== 'true') {
                             historyContainer.innerHTML = item.historyBody;
-                            this.attachEventListeners(historyContainer);
+                            historyContainer.dataset.rendered = 'true';
                         }
                     }
                     const attachContainer = this.template.querySelector(`[data-attachments-id="${item.id}"]`);
-                    if (attachContainer && item.attachmentsHtml && !attachContainer.innerHTML) {
+                    if (attachContainer && item.attachmentsHtml && attachContainer.dataset.rendered !== 'true') {
                         attachContainer.innerHTML = item.attachmentsHtml;
-                        this.attachEventListeners(attachContainer);
+                        attachContainer.dataset.rendered = 'true';
                     }
                 } 
                 
-                // 2. COLLAPSED VIEW (Conditional based on Config)
-                else if (this.showAttachmentsCollapsed) { // <--- CHECK CONFIG HERE
+                // 2. COLLAPSED VIEW
+                else if (this.showAttachmentsCollapsed) {
                     const collapsedAttachContainer = this.template.querySelector(`[data-attachments-collapsed-id="${item.id}"]`);
-                    if (collapsedAttachContainer && item.attachmentsHtml && !collapsedAttachContainer.innerHTML) {
+                    if (collapsedAttachContainer && item.attachmentsHtml && collapsedAttachContainer.dataset.rendered !== 'true') {
                         collapsedAttachContainer.innerHTML = item.attachmentsHtml;
-                        this.attachEventListeners(collapsedAttachContainer);
-                        
-                        // Prevent row expansion when clicking the file
-                        collapsedAttachContainer.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                        });
+                        collapsedAttachContainer.dataset.rendered = 'true';
+                        collapsedAttachContainer.addEventListener('click', (e) => e.stopPropagation());
                     }
                 }
                 
-                // 3. POPOVER - Inject recipient HTML when popover is visible
+                // 3. POPOVER
                 if (item.showEmailInfo && item.isEmailCategory) {
-                    const popoverToContainer = this.template.querySelector(`[data-popover-to="${item.id}"]`);
-                    if (popoverToContainer && item.emailTo && !popoverToContainer.innerHTML) {
-                        popoverToContainer.innerHTML = item.emailTo;
-                        this.attachEventListeners(popoverToContainer);
-                    }
-                    const popoverCcContainer = this.template.querySelector(`[data-popover-cc="${item.id}"]`);
-                    if (popoverCcContainer && item.emailCc && !popoverCcContainer.innerHTML) {
-                        popoverCcContainer.innerHTML = item.emailCc;
-                        this.attachEventListeners(popoverCcContainer);
-                    }
-                    const popoverBccContainer = this.template.querySelector(`[data-popover-bcc="${item.id}"]`);
-                    if (popoverBccContainer && item.emailBcc && !popoverBccContainer.innerHTML) {
-                        popoverBccContainer.innerHTML = item.emailBcc;
-                        this.attachEventListeners(popoverBccContainer);
-                    }
-                    const popoverFromContainer = this.template.querySelector(`[data-popover-from="${item.id}"]`);
-                    if (popoverFromContainer && item.emailFrom && !popoverFromContainer.innerHTML) {
-                        popoverFromContainer.innerHTML = item.emailFrom;
-                        this.attachEventListeners(popoverFromContainer);
-                    }
+                    ['to', 'cc', 'bcc', 'from'].forEach(type => {
+                        const container = this.template.querySelector(`[data-popover-${type}="${item.id}"]`);
+                        if (container && item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`] && container.dataset.rendered !== 'true') {
+                            container.innerHTML = item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`];
+                            container.dataset.rendered = 'true';
+                        }
+                    });
                 }
             });
         }
         
-        // Setup Infinite Scrolling Observer
         this.setupInfiniteScroll();
     }
-    
+
     setupInfiniteScroll() {
         if (this._observer) {
             this._observer.disconnect();
@@ -840,54 +817,60 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this._observer.observe(sentinel);
         }
     }
-    
-    attachEventListeners(container) {
-       if(!container) return;
-       container.querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', this.handleCopyCode.bind(this)));
-       container.querySelectorAll('.image-preview-link').forEach(link => link.addEventListener('click', this.handleImagePreviewClick.bind(this)));
-       container.querySelectorAll('.mention-link').forEach(link => link.addEventListener('click', this.handleMentionClick.bind(this)));
-       container.querySelectorAll('.email-recipient-link').forEach(link => link.addEventListener('click', this.handleRecipientClick.bind(this)));
+
+    /**
+     * UNIVERSAL EVENT DELEGATION
+     * Handles clicks on any dynamically injected HTML (Emails, Comments, Mentions)
+     */
+    handleGlobalClick(event) {
+        const target = event.target;
+        
+        // 1. Image Preview Links
+        const previewLink = target.closest('.image-preview-link');
+        if (previewLink) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.handleImagePreviewClick(previewLink.dataset.docId);
+            return;
+        }
+
+        // 2. Copy Code Buttons
+        const copyBtn = target.closest('.copy-btn');
+        if (copyBtn) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.handleCopyCode(copyBtn);
+            return;
+        }
+
+        // 3. Mention Links
+        const mentionLink = target.closest('.mention-link');
+        if (mentionLink) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.handleMentionClick(mentionLink.dataset.recordId);
+            return;
+        }
+
+        // 4. Email Recipient Links
+        const recipientLink = target.closest('.email-recipient-link');
+        if (recipientLink) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.handleRecipientClick(recipientLink.dataset.recordId);
+            return;
+        }
     }
-    
-    handleCopyCode(event) {
-        const btn = event.target;
-        
-        // 1. Find the wrapper parent
-        const wrapper = btn.closest('.code-wrapper');
-        
-        // 2. Find the hidden textarea sibling
-        const hiddenTextarea = wrapper.querySelector('.raw-code-storage');
-        
-        // 3. Get the value (The browser automatically handles decoding entities like &lt;)
-        const cleanCode = hiddenTextarea ? hiddenTextarea.value : '';
 
-        navigator.clipboard.writeText(cleanCode).then(() => {
-            btn.textContent = 'Copied!';
-            setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-        });
-    }
+    handleImagePreviewClick(docId) {
+        if (!docId) return;
 
-    handleImagePreviewClick(event) {
-        event.preventDefault(); 
-        event.stopPropagation();
-        
-        const docId = event.currentTarget.dataset.docId;
-
-        // CHECK ID PREFIX
-        // '00P' is the key prefix for Legacy Attachments. 
-        // These CANNOT use the 'filePreview' page type.
-        if (docId && docId.startsWith('00P')) {
+        if (docId.startsWith('00P')) {
             this[NavigationMixin.Navigate]({
                 type: 'standard__recordPage',
-                attributes: {
-                    recordId: docId,
-                    objectApiName: 'Attachment',
-                    actionName: 'view'
-                }
+                attributes: { recordId: docId, objectApiName: 'Attachment', actionName: 'view' }
             });
-        } 
-        // '069' is ContentDocument (Files). These look great in 'filePreview'.
-        else {
+        } else {
             this[NavigationMixin.Navigate]({
                 type: 'standard__namedPage',
                 attributes: { pageName: 'filePreview' },
@@ -896,26 +879,30 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         }
     }
 
-    handleMentionClick(event) {
-        event.preventDefault(); event.stopPropagation();
-        this[NavigationMixin.Navigate]({
-            type: 'standard__recordPage',
-            attributes: { recordId: event.currentTarget.dataset.recordId, actionName: 'view' }
+    handleCopyCode(btn) {
+        const wrapper = btn.closest('.code-wrapper');
+        const hiddenTextarea = wrapper.querySelector('.raw-code-storage');
+        const cleanCode = hiddenTextarea ? hiddenTextarea.value : '';
+
+        navigator.clipboard.writeText(cleanCode).then(() => {
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            // eslint-disable-next-line @lwc/lwc/no-async-operation
+            setTimeout(() => { btn.textContent = originalText; }, 2000);
         });
     }
 
-    handleRecipientClick(event) {
-        event.preventDefault(); 
-        event.stopPropagation();
-        const recordId = event.currentTarget.dataset.recordId;
-        
-        // Navigate to the record - will open in subtab in console
+    handleMentionClick(recordId) {
         this[NavigationMixin.Navigate]({
             type: 'standard__recordPage',
-            attributes: { 
-                recordId: recordId, 
-                actionName: 'view' 
-            }
+            attributes: { recordId: recordId, actionName: 'view' }
+        });
+    }
+
+    handleRecipientClick(recordId) {
+        this[NavigationMixin.Navigate]({
+            type: 'standard__recordPage',
+            attributes: { recordId: recordId, actionName: 'view' }
         });
     }
 

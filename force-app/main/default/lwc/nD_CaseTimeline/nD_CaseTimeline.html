@@ -64,7 +64,7 @@
       </div>
     </template>
 
-    <div class="slds-p-horizontal_medium slds-p-bottom_medium slds-scrollable_y timeline-container">
+    <div class="slds-p-horizontal_medium slds-p-bottom_medium slds-scrollable_y timeline-container" onclick={handleGlobalClick}>
       <template if:true={isLoading}>
         <div class="slds-align_absolute-center" style="min-height: 200px;">
           <lightning-spinner alternative-text="Loading..." size="medium">

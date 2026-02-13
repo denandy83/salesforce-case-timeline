@@ -469,11 +469,15 @@ public without sharing class ND_CaseTimelineController {
             allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name FROM FeedComment WHERE FeedItemId IN :allFeedIds ORDER BY CreatedDate ASC];
         }
 
-        Pattern sfdcPattern = Pattern.compile('sfdc://([a-zA-Z0-9]{15,18})');
+        Pattern idPattern = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}');
         for (FeedComment fc : allComments) {
             if (String.isNotBlank(fc.CommentBody)) {
-                Matcher m = sfdcPattern.matcher(fc.CommentBody);
-                while (m.find()) contentDocIds.add(m.group(1));
+                Matcher m = idPattern.matcher(fc.CommentBody);
+                while (m.find()) {
+                    String rid = m.group();
+                    if (rid.startsWith('069')) contentDocIds.add(rid);
+                    else if (rid.startsWith('068')) contentVersionIds.add(rid);
+                }
             }
         }
         for (FeedItem cf : feedItems) {
@@ -487,14 +491,22 @@ public without sharing class ND_CaseTimelineController {
                 }
             }
             if (String.isNotBlank(cf.Body)) {
-                Matcher m = sfdcPattern.matcher(cf.Body);
-                while (m.find()) contentDocIds.add(m.group(1));
+                Matcher m = idPattern.matcher(cf.Body);
+                while (m.find()) {
+                    String rid = m.group();
+                    if (rid.startsWith('069')) contentDocIds.add(rid);
+                    else if (rid.startsWith('068')) contentVersionIds.add(rid);
+                }
             }
         }
         for (EmailMessage em : emails) {
             if (String.isNotBlank(em.HtmlBody)) {
-                Matcher m = sfdcPattern.matcher(em.HtmlBody);
-                while (m.find()) contentDocIds.add(m.group(1));
+                Matcher m = idPattern.matcher(em.HtmlBody);
+                while (m.find()) {
+                    String rid = m.group();
+                    if (rid.startsWith('069')) contentDocIds.add(rid);
+                    else if (rid.startsWith('068')) contentVersionIds.add(rid);
+                }
             }
         }
 
@@ -505,15 +517,20 @@ public without sharing class ND_CaseTimelineController {
 
         if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
             for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds) AND IsLatest = true]) {
-                ctx.documentIdToVersionId.put(cv.ContentDocumentId, cv.Id);
-                if (String.valueOf(cv.ContentDocumentId).length() >= 15) {
-                    ctx.documentIdToVersionId.put(String.valueOf(cv.ContentDocumentId).substring(0, 15), cv.Id);
-                }
-                ctx.versionIdToDocumentId.put(cv.Id, cv.ContentDocumentId);
-                ctx.docIdToTitle.put(cv.ContentDocumentId, cv.Title);
-                ctx.docIdToExtension.put(cv.ContentDocumentId, cv.FileExtension);
-                ctx.docIdToTitle.put(cv.Id, cv.Title);
-                ctx.docIdToExtension.put(cv.Id, cv.FileExtension);
+                String docId = cv.ContentDocumentId;
+                String verId = cv.Id;
+                
+                // Store BOTH 15 and 18 char versions for robust lookup
+                ctx.documentIdToVersionId.put(docId, verId);
+                ctx.documentIdToVersionId.put(docId.substring(0, 15), verId);
+                
+                ctx.versionIdToDocumentId.put(verId, docId);
+                ctx.versionIdToDocumentId.put(verId.substring(0, 15), docId);
+                
+                ctx.docIdToTitle.put(docId, cv.Title);
+                ctx.docIdToTitle.put(docId.substring(0, 15), cv.Title);
+                ctx.docIdToExtension.put(docId, cv.FileExtension);
+                ctx.docIdToExtension.put(docId.substring(0, 15), cv.FileExtension);
             }
         }
 
@@ -522,7 +539,7 @@ public without sharing class ND_CaseTimelineController {
             if (!ctx.commentsMap.containsKey(fc.FeedItemId)) ctx.commentsMap.put(fc.FeedItemId, new List<CommentItem>());
             String processedBody = fc.CommentBody;
             if (String.isNotBlank(processedBody)) {
-                processedBody = fixRelativeImageUrls(processedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                processedBody = fixRelativeImageUrls(processedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
                 processedBody = makeImagesClickable(processedBody, ctx.versionIdToDocumentId);
             }
             ctx.commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
@@ -561,23 +578,65 @@ public without sharing class ND_CaseTimelineController {
             item.emailFrom = enrichEmailAddresses(String.isNotBlank(em.FromAddress) ? em.FromAddress : em.FromName, ctx.emailToRecordMap);
             item.emailSubject = em.Subject;
 
+            List<Attachment> availableAtts = ctx.emailLegacyAttachments.get(em.Id);
             if (String.isNotBlank(em.HtmlBody)) {
-                String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
                 item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
             } else {
                 item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
             }
 
+            // Attachments (Definitive Exclusion)
+            Set<String> rawInlineIds = getUsedInlineIds(item.body);
+            Set<String> inlineIds = new Set<String>();
+            
+            // Map every detected ID to BOTH its Version and Document counterparts
+            for (String rid : rawInlineIds) {
+                inlineIds.add(rid);
+                inlineIds.add(rid.substring(0, 15));
+                if (rid.startsWith('068') && ctx.versionIdToDocumentId.containsKey(rid)) {
+                    String docId = ctx.versionIdToDocumentId.get(rid);
+                    inlineIds.add(docId);
+                    inlineIds.add(docId.substring(0, 15));
+                } else if (rid.startsWith('069') && ctx.documentIdToVersionId.containsKey(rid)) {
+                    String verId = ctx.documentIdToVersionId.get(rid);
+                    inlineIds.add(verId);
+                    inlineIds.add(verId.substring(0, 15));
+                }
+            }
+
+            String bodyLower = item.body.toLowerCase();
             List<String> cards = new List<String>();
             if (ctx.emailAttachments.containsKey(em.Id)) {
                 for (ContentDocumentLink link : ctx.emailAttachments.get(em.Id)) {
-                    cards.add(getAttachmentCardHtml(link.ContentDocumentId, link.ContentDocument.Title, link.ContentDocument.FileExtension));
+                    String docId = link.ContentDocumentId;
+                    Boolean isUsed = inlineIds.contains(docId) || inlineIds.contains(docId.substring(0, 15));
+                    
+                    // SUPPRESSION LAYER 2: Check Version ID too
+                    if (!isUsed && ctx.documentIdToVersionId.containsKey(docId)) {
+                        String verId = ctx.documentIdToVersionId.get(docId);
+                        if (inlineIds.contains(verId) || inlineIds.contains(verId.substring(0, 15))) isUsed = true;
+                    }
+                    
+                    if (isUsed) continue;
+                    
+                    // Fallback to name match only if name is distinctive
+                    String title = link.ContentDocument.Title;
+                    if (String.isNotBlank(title) && title.length() > 5 && bodyLower.contains(title.toLowerCase())) continue;
+                    
+                    cards.add(getAttachmentCardHtml(docId, title, link.ContentDocument.FileExtension));
                 }
             }
-            if (ctx.emailLegacyAttachments.containsKey(em.Id)) {
-                for (Attachment att : ctx.emailLegacyAttachments.get(em.Id)) {
-                    String ext = (att.Name != null && att.Name.contains('.')) ? att.Name.substringAfterLast('.') : '';
-                    cards.add(getAttachmentCardHtml(att.Id, att.Name, ext));
+            if (availableAtts != null) {
+                for (Attachment att : availableAtts) {
+                    String attId = att.Id;
+                    if (inlineIds.contains(attId) || inlineIds.contains(attId.substring(0, 15))) continue;
+                    
+                    String name = att.Name;
+                    if (String.isNotBlank(name) && name.length() > 5 && bodyLower.contains(name.toLowerCase())) continue;
+                    
+                    String ext = (name != null && name.contains('.')) ? name.substringAfterLast('.') : '';
+                    cards.add(getAttachmentCardHtml(attId, name, ext));
                 }
             }
             item.attachmentsHtml = (!cards.isEmpty()) ? '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(cards, '') + '</div>' : '';
@@ -649,14 +708,14 @@ public without sharing class ND_CaseTimelineController {
                     }
                 }
                 for (String mentionText : mentionReplacements.keySet()) processed = processed.replace(mentionText, mentionReplacements.get(mentionText));
-                String cleanBody = fixRelativeImageUrls(processed, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                String cleanBody = fixRelativeImageUrls(processed, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
                 if (String.isNotBlank(cleanBody)) {
                     item.body = cleanHtml(cleanBody, true);
                     item.body = makeImagesClickable(item.body, ctx.versionIdToDocumentId);
                     for (String placeholder : mentionProtectionMap.keySet()) item.body = item.body.replace(placeholder, mentionProtectionMap.get(placeholder));
                 } else item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
             } else {
-                String cleanBody = fixRelativeImageUrls(formattedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId);
+                String cleanBody = fixRelativeImageUrls(formattedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
                 if (soqlFeedItem.FeedTrackedChanges != null && !soqlFeedItem.FeedTrackedChanges.isEmpty() && String.isBlank(formattedBody)) item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, ctx.statusMap);
                 else if (String.isNotBlank(cleanBody)) {
                     item.body = cleanHtml(cleanBody, true); item.body = makeImagesClickable(item.body, ctx.versionIdToDocumentId);
@@ -702,8 +761,11 @@ public without sharing class ND_CaseTimelineController {
         
         if (soqlFeedItem.FeedAttachments != null && !soqlFeedItem.FeedAttachments.isEmpty()) {
             for (FeedAttachment fa : soqlFeedItem.FeedAttachments) {
+                // EXCLUDE InlineImage type as it is already in the body
+                if (fa.Type == 'InlineImage') continue;
+
                 String rId = (String)fa.RecordId;
-                if ((fa.Type == 'Content' || fa.Type == 'InlineImage') && String.isNotBlank(rId)) {
+                if (fa.Type == 'Content' && String.isNotBlank(rId)) {
                     String docId = null;
                     
                     if (rId.startsWith('069')) docId = rId;
@@ -723,6 +785,19 @@ public without sharing class ND_CaseTimelineController {
             return '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(attachmentCards, '') + '</div>';
         }
         return '';
+    }
+
+    private static Set<String> getUsedInlineIds(String html) {
+        Set<String> ids = new Set<String>();
+        if (String.isBlank(html)) return ids;
+        
+        // Match ANY 15-18 char Salesforce ID starting with our prefixes anywhere in the text
+        Pattern p = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}');
+        Matcher m = p.matcher(html);
+        while (m.find()) {
+            ids.add(m.group());
+        }
+        return ids;
     }
 
     @AuraEnabled
@@ -790,49 +865,58 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @TestVisible
-    private static String fixRelativeImageUrls(String html, String baseUrl, String fileBaseUrl, Map<String, String> documentIdToVersionId) {
+    private static String fixRelativeImageUrls(String html, String baseUrl, String fileBaseUrl, Map<String, String> documentIdToVersionId, List<Attachment> legacyAtts) {
         if (String.isBlank(html)) return html;
-        String result = html;
-        // Handle both double and single quotes for sfdc:// links
-        Pattern p0 = Pattern.compile('(?i)<img([^>]*?)src=["\']sfdc://([^"\']+)["\']');
-        Matcher m0 = p0.matcher(result);
-        while (m0.find()) {
-            String fullMatch = m0.group(); String beforeSrc = m0.group(1); String contentDocumentId = m0.group(2);
-            String contentVersionId = documentIdToVersionId.get(contentDocumentId);
-            
-            System.debug('--- Image Fix Debug ---');
-            System.debug('Original Tag: ' + fullMatch);
-            System.debug('Extracted Doc ID: ' + contentDocumentId);
-            System.debug('Found Version ID: ' + contentVersionId);
-            
-            String replacement = (String.isNotBlank(contentVersionId)) ? '<img' + beforeSrc + 'src="' + fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + contentVersionId + '&operationContext=CHATTER&contentId=' + contentDocumentId + '"' : fullMatch;
-            
-            System.debug('Replacement Tag: ' + replacement);
-            
-            result = result.replace(fullMatch, replacement);
-        }
         
-        // Fix 2: Handle absolute servlet.ImageServer URLs (convert to relative)
-        // Matches: src="https://domain.../servlet/servlet.ImageServer?..." -> src="/servlet/servlet.ImageServer?..."
-        Pattern p2 = Pattern.compile('(?i)<img([^>]*?)src="https?://[^/]+(/servlet/servlet\\.ImageServer\\?[^"]+)"');
-        Matcher m2 = p2.matcher(result);
-        while (m2.find()) {
-            String fullMatch = m2.group();
-            String attrs = m2.group(1);
-            String relativePath = m2.group(2);
-            // Replace with relative URL to use current session/domain
-            String replacement = '<img' + attrs + 'src="' + relativePath + '"';
-            result = result.replace(fullMatch, replacement);
-        }
-
-        if (String.isNotBlank(baseUrl)) {
-            Pattern p1 = Pattern.compile('(?i)<img([^>]*?)src="(/sfc/[^"]+)"');
-            Matcher m1 = p1.matcher(result);
-            while (m1.find()) {
-                String fullMatch = m1.group(); String relativeUrl = m1.group(2);
-                result = result.replace(fullMatch, '<img' + m1.group(1) + 'src="' + baseUrl + relativeUrl + '"');
+        Pattern imgPattern = Pattern.compile('(?i)<img([^>]*?)>');
+        Matcher m = imgPattern.matcher(html);
+        
+        String result = '';
+        Integer lastEnd = 0;
+        Integer attIndex = 0;
+        
+        while (m.find()) {
+            result += html.substring(lastEnd, m.start());
+            String fullTag = m.group();
+            String attrs = m.group(1);
+            
+            Pattern srcPattern = Pattern.compile('(?i)src=["\']([^"\']+)["\']');
+            Matcher srcMatcher = srcPattern.matcher(fullTag);
+            String src = srcMatcher.find() ? srcMatcher.group(1) : '';
+            String newSrc = src;
+            
+            // 1. Convert MyDomain to FileDomain
+            if (src.containsIgnoreCase('.my.salesforce.com')) {
+                newSrc = src.replace('.my.salesforce.com', '.file.force.com');
             }
+            // 2. Process sfdc:// or /sfc/ links
+            else if (src.startsWithIgnoreCase('sfdc://') || src.startsWithIgnoreCase('/sfc/')) {
+                String id = src.startsWithIgnoreCase('sfdc://') ? src.substring(7) : src.substringAfter('/sfc/').substringBefore('?').substringBefore('/');
+                if (id.length() >= 15) {
+                    String cleanId = id.substring(0, 15);
+                    if (cleanId.startsWith('00P')) {
+                         newSrc = fileBaseUrl + '/servlet/servlet.FileDownload?file=' + cleanId;
+                    } else if (documentIdToVersionId.containsKey(cleanId)) {
+                         newSrc = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + documentIdToVersionId.get(cleanId) + '&operationContext=CHATTER&contentId=' + cleanId;
+                    }
+                }
+            } 
+            // 3. REPAIR: Only for internal/embedded relative links (cid:, /servlet/, etc.)
+            // Skip any absolute https:// links that are NOT Salesforce (like signatures)
+            else if (src.startsWithIgnoreCase('/') || src.startsWithIgnoreCase('cid:')) {
+                if (legacyAtts != null && attIndex < legacyAtts.size()) {
+                    newSrc = fileBaseUrl + '/servlet/servlet.FileDownload?file=' + legacyAtts[attIndex].Id;
+                    attIndex++;
+                } else if (src.startsWithIgnoreCase('/')) {
+                    newSrc = fileBaseUrl + src;
+                }
+            }
+
+            String cleanAttrs = attrs.replaceAll('(?i)src=["\'][^"\']*["\']', '').trim();
+            result += '<img ' + cleanAttrs + ' src="' + newSrc + '">';
+            lastEnd = m.end();
         }
+        result += html.substring(lastEnd);
         return result;
     }
 
@@ -885,20 +969,79 @@ public without sharing class ND_CaseTimelineController {
     @TestVisible private static String makeImagesClickable(String html, Map<String, String> versionIdToDocId) {
         if (String.isBlank(html)) return html;
         String result = html;
-        Pattern imgPattern = Pattern.compile('(?i)<img([^>]*?)src="([^"]+)"([^>]*?)>');
+        // Match <img> tags and capture their attributes and src
+        Pattern imgPattern = Pattern.compile('(?i)<img([^>]*?)src=["\']([^"\']+)["\']([^>]*?)>');
         Matcher imgMatcher = imgPattern.matcher(result);
+        
         while (imgMatcher.find()) {
-            String fullMatch = imgMatcher.group(); String beforeSrc = imgMatcher.group(1); String srcUrl = imgMatcher.group(2); String afterSrc = imgMatcher.group(3);
-            String versionId = null;
-            if (srcUrl.contains('versionId=')) {
-                Integer startIdx = srcUrl.indexOf('versionId=') + 10; Integer endIdx = srcUrl.indexOf('&', startIdx);
-                if (endIdx == -1) endIdx = srcUrl.length(); versionId = srcUrl.substring(startIdx, endIdx);
+            String fullMatch = imgMatcher.group(); 
+            String beforeSrc = imgMatcher.group(1); 
+            String srcUrl = imgMatcher.group(2); 
+            String afterSrc = imgMatcher.group(3);
+            
+            String docId = null;
+            
+            // 1. Try to get ContentDocumentId (docId) directly from URL params
+            if (srcUrl.contains('contentId=')) {
+                docId = extractParam(srcUrl, 'contentId=');
+            } 
+            // 2. Try to get Attachment ID from legacy servlet URL
+            else if (srcUrl.contains('file=')) {
+                docId = extractParam(srcUrl, 'file=');
             }
-            String docId = versionIdToDocId.get(versionId);
-            String replacement = (String.isNotBlank(docId)) ? '<a href="/lightning/r/ContentDocument/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:block; max-width:80%;"><img' + beforeSrc + 'src="' + srcUrl + '"' + afterSrc + ' style="max-width:100%; cursor:pointer;"></a>' : '<a href="' + srcUrl.replaceAll('([?&])rendition=[^&]*(&|$)', '$1').replaceAll('[?&]$', '') + '" target="_blank" style="display:block; max-width:80%;"><img' + beforeSrc + 'src="' + srcUrl + '"' + afterSrc + ' style="max-width:100%; cursor:pointer;"></a>';
+            // 3. Try to get Version ID from query param
+            else if (srcUrl.contains('versionId=')) {
+                String versionId = extractParam(srcUrl, 'versionId=');
+                docId = versionIdToDocId.get(versionId);
+                if (docId == null && versionId != null && versionId.length() >= 15) {
+                    docId = versionIdToDocId.get(versionId.substring(0, 15));
+                }
+            }
+            // 4. Try to get Version ID from REST path (e.g. /version/download/068...)
+            else if (srcUrl.contains('/version/download/')) {
+                String versionId = srcUrl.substringAfter('/version/download/');
+                // Truncate at next slash or query param if exists
+                if (versionId.contains('/')) versionId = versionId.substringBefore('/');
+                if (versionId.contains('?')) versionId = versionId.substringBefore('?');
+                
+                if (String.isNotBlank(versionId)) {
+                    docId = versionIdToDocId.get(versionId);
+                    if (docId == null && versionId.length() >= 15) {
+                        docId = versionIdToDocId.get(versionId.substring(0, 15));
+                    }
+                }
+            }
+            
+            // Ensure ID is a valid Salesforce ID format
+            if (docId != null && (docId.length() < 15 || (!docId.startsWith('069') && !docId.startsWith('00P')))) {
+                docId = null;
+            }
+
+            String replacement;
+            if (String.isNotBlank(docId)) {
+                // Use javascript:void(0) to prevent browser navigation/download
+                // The LWC event handler will pick up the click via data-doc-id
+                replacement = '<a href="javascript:void(0);" class="image-preview-link" data-doc-id="' + docId + '" style="display:block; max-width:80%; cursor:pointer;">' +
+                              '<img' + beforeSrc + ' src="' + srcUrl + '"' + afterSrc + ' style="max-width:100%;"></a>';
+            } else {
+                // Fallback for external images: open in new tab
+                String cleanUrl = srcUrl.replaceAll('(?i)([?&])rendition=[^&]*(&|$)', '$1').replaceAll('[?&]$', '');
+                replacement = '<a href="' + cleanUrl + '" target="_blank" style="display:block; max-width:80%;">' +
+                              '<img' + beforeSrc + ' src="' + srcUrl + '"' + afterSrc + ' style="max-width:100%; cursor:pointer;"></a>';
+            }
+            
             result = result.replace(fullMatch, replacement);
         }
         return result;
+    }
+
+    private static String extractParam(String url, String paramName) {
+        try {
+            Integer startIdx = url.indexOf(paramName) + paramName.length();
+            Integer endIdx = url.indexOf('&', startIdx);
+            if (endIdx == -1) endIdx = url.length();
+            return url.substring(startIdx, endIdx);
+        } catch (Exception e) { return null; }
     }
 
     private static String cleanHtml(String html, Boolean shouldLinkify) {
