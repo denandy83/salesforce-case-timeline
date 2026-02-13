@@ -90,7 +90,7 @@ public without sharing class ND_CaseTimelineController {
             List<String> systemTypes = new List<String>{'TrackedChange', 'CreateRecordEvent', 'ActivityEvent', 'CaseCommentPost', 'ChangeStatusPost', 'MilestoneEvent'};
             Set<String> sysTypeSet = new Set<String>(systemTypes);
             
-            List<FeedItem> feeds = [SELECT Type, Visibility, CreatedBy.Name 
+            List<FeedItem> feeds = [SELECT Type, Visibility, CreatedBy.Name, Title 
                                     FROM FeedItem 
                                     WHERE ParentId = :caseId 
                                     AND Type != 'EmailMessageEvent' 
@@ -99,6 +99,10 @@ public without sharing class ND_CaseTimelineController {
             for (FeedItem fi : feeds) {
                 Boolean isSystem = false;
                 if (sysTypeSet.contains(fi.Type) || fi.CreatedBy.Name == 'Automated Process') {
+                    isSystem = true;
+                }
+                // Add Title checks to match transformFeedItems logic
+                if (fi.Title == 'SYSTEM' || fi.Title == 'MILESTONE' || fi.Title == 'Owner Changed') {
                     isSystem = true;
                 }
                 
@@ -606,35 +610,46 @@ public without sharing class ND_CaseTimelineController {
             }
 
             String bodyLower = item.body.toLowerCase();
+            // Only suppress attachments if we are rendering HTML and might have inline images
+            Boolean isHtml = String.isNotBlank(em.HtmlBody);
+            
             List<String> cards = new List<String>();
             if (ctx.emailAttachments.containsKey(em.Id)) {
                 for (ContentDocumentLink link : ctx.emailAttachments.get(em.Id)) {
                     String docId = link.ContentDocumentId;
-                    Boolean isUsed = inlineIds.contains(docId) || inlineIds.contains(docId.substring(0, 15));
+                    Boolean isUsed = false;
                     
-                    // SUPPRESSION LAYER 2: Check Version ID too
-                    if (!isUsed && ctx.documentIdToVersionId.containsKey(docId)) {
-                        String verId = ctx.documentIdToVersionId.get(docId);
-                        if (inlineIds.contains(verId) || inlineIds.contains(verId.substring(0, 15))) isUsed = true;
+                    if (isHtml) {
+                        isUsed = inlineIds.contains(docId) || inlineIds.contains(docId.substring(0, 15));
+                        // SUPPRESSION LAYER 2: Check Version ID too
+                        if (!isUsed && ctx.documentIdToVersionId.containsKey(docId)) {
+                            String verId = ctx.documentIdToVersionId.get(docId);
+                            if (inlineIds.contains(verId) || inlineIds.contains(verId.substring(0, 15))) isUsed = true;
+                        }
+                        // Fallback to name match only if name is distinctive
+                        String title = link.ContentDocument.Title;
+                        if (!isUsed && String.isNotBlank(title) && title.length() > 5 && bodyLower.contains(title.toLowerCase())) isUsed = true;
                     }
                     
                     if (isUsed) continue;
                     
-                    // Fallback to name match only if name is distinctive
-                    String title = link.ContentDocument.Title;
-                    if (String.isNotBlank(title) && title.length() > 5 && bodyLower.contains(title.toLowerCase())) continue;
-                    
-                    cards.add(getAttachmentCardHtml(docId, title, link.ContentDocument.FileExtension));
+                    cards.add(getAttachmentCardHtml(docId, link.ContentDocument.Title, link.ContentDocument.FileExtension));
                 }
             }
             if (availableAtts != null) {
                 for (Attachment att : availableAtts) {
                     String attId = att.Id;
-                    if (inlineIds.contains(attId) || inlineIds.contains(attId.substring(0, 15))) continue;
+                    Boolean isUsed = false;
+                    
+                    if (isHtml) {
+                        isUsed = inlineIds.contains(attId) || inlineIds.contains(attId.substring(0, 15));
+                        String name = att.Name;
+                        if (!isUsed && String.isNotBlank(name) && name.length() > 5 && bodyLower.contains(name.toLowerCase())) isUsed = true;
+                    }
+                    
+                    if (isUsed) continue;
                     
                     String name = att.Name;
-                    if (String.isNotBlank(name) && name.length() > 5 && bodyLower.contains(name.toLowerCase())) continue;
-                    
                     String ext = (name != null && name.contains('.')) ? name.substringAfterLast('.') : '';
                     cards.add(getAttachmentCardHtml(attId, name, ext));
                 }

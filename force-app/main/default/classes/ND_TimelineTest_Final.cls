@@ -172,7 +172,7 @@ public class ND_TimelineTest_Final {
         
         Map<String, String> docMap = new Map<String,String>{'069000000000001' => '068000000000001'};
         String imgHtml = '<img src="sfdc://069000000000001">';
-        String fixed = ND_CaseTimelineController.fixRelativeImageUrls(imgHtml, 'domain', 'filedomain', docMap);
+        String fixed = ND_CaseTimelineController.fixRelativeImageUrls(imgHtml, 'domain', 'filedomain', docMap, new List<Attachment>());
         System.assert(fixed.contains('filedomain'));
 
         Test.stopTest();
