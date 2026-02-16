@@ -322,7 +322,7 @@ public without sharing class ND_CaseTimelineController {
         
         // 1. Add standard feed items to enrichment
         for (FeedItem fi : finalFeeds) {
-            if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost') {
+            if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost' || fi.Type == 'CaseCommentPost') {
                 idsToEnrich.add(fi.Id);
             }
         }
@@ -362,6 +362,8 @@ public without sharing class ND_CaseTimelineController {
                                     emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
                                 }
                             }
+                        } else {
+                            if (debugMode) System.debug('ConnectApi Batch Error: ' + result.getErrorMessage());
                         }
                     }
                 }
@@ -708,6 +710,20 @@ public without sharing class ND_CaseTimelineController {
 
             if (parsedResult != null) item.body = parsedResult;
             else if (connectFeedItem != null) {
+                Boolean isHandled = false;
+                // Check for CaseComment capability (e.g. Case Merge)
+                if (connectFeedItem.capabilities != null && connectFeedItem.capabilities.caseComment != null && String.isNotBlank(connectFeedItem.capabilities.caseComment.text)) {
+                    item.body = connectFeedItem.capabilities.caseComment.text;
+                    isHandled = true;
+                    
+                    // Specific Title for Merge events
+                    if (item.body.containsIgnoreCase('merged with')) {
+                        item.title = '⚙️ Cases Merged';
+                    }
+                    
+                    if (ctx.sortDirection != null) System.debug('Found Case Comment Text: ' + item.body); // Use existing context var for debug trigger
+                }
+                
                 String processed = formattedBody;
                 Map<String, String> mentionReplacements = new Map<String, String>();
                 Map<String, String> mentionProtectionMap = new Map<String, String>();
@@ -728,7 +744,9 @@ public without sharing class ND_CaseTimelineController {
                     item.body = cleanHtml(cleanBody, true);
                     item.body = makeImagesClickable(item.body, ctx.versionIdToDocumentId);
                     for (String placeholder : mentionProtectionMap.keySet()) item.body = item.body.replace(placeholder, mentionProtectionMap.get(placeholder));
-                } else item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
+                } else if (!isHandled) {
+                    item.body = '<i>[' + soqlFeedItem.Type + ']</i>';
+                }
             } else {
                 String cleanBody = fixRelativeImageUrls(formattedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
                 if (soqlFeedItem.FeedTrackedChanges != null && !soqlFeedItem.FeedTrackedChanges.isEmpty() && String.isBlank(formattedBody)) item.body = processTrackedChanges(soqlFeedItem.FeedTrackedChanges, ctx.statusMap);
@@ -975,7 +993,7 @@ public without sharing class ND_CaseTimelineController {
     }
 
     @TestVisible private static Map<String, String> getStatusMap() {
-        Map<String, String> m = new Map<String, String>(); m.put('1', 'New'); m.put('2', 'On Hold'); m.put('3', 'Closed'); m.put('6', 'Open'); m.put('7', 'Working'); m.put('8', 'Waiting for Customer'); m.put('9', 'Solved');
+        Map<String, String> m = new Map<String, String>(); m.put('1', 'New'); m.put('2', 'On Hold'); m.put('3', 'Closed'); m.put('6', 'Open'); m.put('7', 'Working'); m.put('8', 'Waiting for Customer'); m.put('9', 'Solved'); m.put('10', 'Merged');
         try { for(Schema.PicklistEntry f : Case.Status.getDescribe().getPicklistValues()) { m.put(f.getValue(), f.getLabel()); m.put(f.getLabel(), f.getLabel()); } } catch (Exception e) { }
         return m;
     }
