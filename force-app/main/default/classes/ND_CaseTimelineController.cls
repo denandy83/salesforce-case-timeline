@@ -17,10 +17,10 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public String emailTo; // Email To addresses
         @AuraEnabled public String emailCc; // Email CC addresses
         @AuraEnabled public String emailBcc; // Email BCC addresses
-        @ AuraEnabled public String emailFrom; // Email From address
-        @ AuraEnabled public String emailSubject; // Email Subject for info popover
-        @ AuraEnabled public List<CommentItem> comments; // Comments on the feed item or email
-        @ AuraEnabled public String feedItemId; // The ID of the FeedItem to post comments to
+        @AuraEnabled public String emailFrom; // Email From address
+        @AuraEnabled public String emailSubject; // Email Subject for info popover
+        @AuraEnabled public List<CommentItem> comments; // Comments on the feed item or email
+        @AuraEnabled public String feedItemId; // The ID of the FeedItem to post comments to
         
         public String sortDir; // Not exposed to LWC, just for internal sorting
 
@@ -46,10 +46,10 @@ public without sharing class ND_CaseTimelineController {
     }
     
     public class CommentItem {
-        @ AuraEnabled public String id;
-        @ AuraEnabled public String body;
-        @ AuraEnabled public String author;
-        @ AuraEnabled public DateTime createdDate;
+        @AuraEnabled public String id;
+        @AuraEnabled public String body;
+        @AuraEnabled public String author;
+        @AuraEnabled public DateTime createdDate;
         
         public CommentItem(String id, String body, String author, DateTime createdDate) {
             this.id = id;
@@ -475,7 +475,7 @@ public without sharing class ND_CaseTimelineController {
             allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name FROM FeedComment WHERE FeedItemId IN :allFeedIds ORDER BY CreatedDate ASC];
         }
 
-        Pattern idPattern = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}');
+        Pattern idPattern = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}\\b');
         for (FeedComment fc : allComments) {
             if (String.isNotBlank(fc.CommentBody)) {
                 Matcher m = idPattern.matcher(fc.CommentBody);
@@ -522,21 +522,25 @@ public without sharing class ND_CaseTimelineController {
         ctx.docIdToExtension = new Map<String, String>();
 
         if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
-            for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds) AND IsLatest = true]) {
-                String docId = cv.ContentDocumentId;
-                String verId = cv.Id;
-                
-                // Store BOTH 15 and 18 char versions for robust lookup
-                ctx.documentIdToVersionId.put(docId, verId);
-                ctx.documentIdToVersionId.put(docId.substring(0, 15), verId);
-                
-                ctx.versionIdToDocumentId.put(verId, docId);
-                ctx.versionIdToDocumentId.put(verId.substring(0, 15), docId);
-                
-                ctx.docIdToTitle.put(docId, cv.Title);
-                ctx.docIdToTitle.put(docId.substring(0, 15), cv.Title);
-                ctx.docIdToExtension.put(docId, cv.FileExtension);
-                ctx.docIdToExtension.put(docId.substring(0, 15), cv.FileExtension);
+            try {
+                for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds) AND IsLatest = true]) {
+                    String docId = cv.ContentDocumentId;
+                    String verId = cv.Id;
+                    
+                    // Store BOTH 15 and 18 char versions for robust lookup
+                    ctx.documentIdToVersionId.put(docId, verId);
+                    ctx.documentIdToVersionId.put(docId.substring(0, 15), verId);
+                    
+                    ctx.versionIdToDocumentId.put(verId, docId);
+                    ctx.versionIdToDocumentId.put(verId.substring(0, 15), docId);
+                    
+                    ctx.docIdToTitle.put(docId, cv.Title);
+                    ctx.docIdToTitle.put(docId.substring(0, 15), cv.Title);
+                    ctx.docIdToExtension.put(docId, cv.FileExtension);
+                    ctx.docIdToExtension.put(docId.substring(0, 15), cv.FileExtension);
+                }
+            } catch (Exception e) {
+                System.debug('Error querying ContentVersion: ' + e.getMessage());
             }
         }
 
@@ -585,11 +589,16 @@ public without sharing class ND_CaseTimelineController {
             item.emailSubject = em.Subject;
 
             List<Attachment> availableAtts = ctx.emailLegacyAttachments.get(em.Id);
-            if (String.isNotBlank(em.HtmlBody)) {
-                String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
-                item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
-            } else {
-                item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
+            try {
+                if (String.isNotBlank(em.HtmlBody)) {
+                    String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
+                    item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
+                } else {
+                    item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
+                }
+            } catch (Exception e) {
+                System.debug('Error processing email body for ' + em.Id + ': ' + e.getMessage());
+                item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '<i>(Content could not be displayed due to size or format limits)</i>';
             }
 
             // Attachments (Definitive Exclusion)
