@@ -6,6 +6,7 @@ import checkForNewItems from '@salesforce/apex/ND_CaseTimelineController.checkFo
 import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTimelineConfig';
 import getTimelineCounts from '@salesforce/apex/ND_CaseTimelineController.getTimelineCounts';
 import addComment from '@salesforce/apex/ND_CaseTimelineController.addComment';
+import getEmailHistory from '@salesforce/apex/ND_CaseTimelineController.getEmailHistory';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -268,10 +269,19 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
 
         // 1. Parse Email Content (Hybrid Split/DOM approach)
         if (processedItem.category === 'Email') {
+            const serverHadHistory = processedItem.hasHistory;
             const parsed = this.parseEmailContent(processedItem.body);
             processedItem.body = parsed.newContent;
-            processedItem.historyBody = parsed.historyContent;
-            processedItem.hasHistory = parsed.hasHistory;
+            
+            // If the server already identified history, keep that flag true
+            // even if the client-side parser doesn't find a new split point
+            // in the already-stripped content.
+            processedItem.hasHistory = serverHadHistory || parsed.hasHistory;
+            
+            // Only use the client-parsed history if it actually found something
+            if (parsed.hasHistory) {
+                processedItem.historyBody = parsed.historyContent;
+            }
         }
 
         // 2. Create Plain Text Preview
@@ -598,13 +608,30 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         setTimeout(() => { this.renderedCallback(); }, 0);
     }
 
-    handleHistoryToggle(event) {
+    async handleHistoryToggle(event) {
         event.preventDefault();
         const clickedId = event.currentTarget.dataset.id;
-        this.allItems = this.allItems.map(item => {
-            if (item.id === clickedId) { return { ...item, historyExpanded: !item.historyExpanded }; }
-            return item;
-        });
+        
+        const item = this.allItems.find(i => i.id === clickedId);
+        if (item && !item.historyExpanded && !item.historyBody && item.hasHistory) {
+            try {
+                const history = await getEmailHistory({ emailId: clickedId });
+                this.allItems = this.allItems.map(i => {
+                    if (i.id === clickedId) {
+                        return { ...i, historyBody: history, historyExpanded: true };
+                    }
+                    return i;
+                });
+            } catch (error) {
+                console.error('Error fetching email history:', error);
+            }
+        } else {
+            this.allItems = this.allItems.map(i => {
+                if (i.id === clickedId) { return { ...i, historyExpanded: !i.historyExpanded }; }
+                return i;
+            });
+        }
+        
         setTimeout(() => { this.renderedCallback(); }, 0);
     }
 
@@ -739,64 +766,68 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     }
 
     renderedCallback() {
-        // Cache Busting Log
-        if (this.debugMode) console.log('Timeline Rendered - Cache Bust v1');
+        if (this.debugMode) console.log('Timeline renderedCallback starting...');
 
         if (this.filteredData && this.filteredData.length > 0) {
             this.filteredData.forEach(item => {
-                
-                // 1. EXPANDED VIEW
-                if (item.isExpanded) {
-                    const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
-                    if (bodyContainer && item.body && bodyContainer.dataset.rendered !== 'true') {
-                        bodyContainer.innerHTML = item.body;
-                        bodyContainer.dataset.rendered = 'true';
+                try {
+                    // 1. EXPANDED VIEW
+                    if (item.isExpanded) {
+                        const bodyContainer = this.template.querySelector(`[data-body-id="${item.id}"]`);
+                        if (bodyContainer && item.body && bodyContainer.dataset.rendered !== 'true') {
+                            bodyContainer.innerHTML = item.body;
+                            bodyContainer.dataset.rendered = 'true';
+                        } else if (!bodyContainer && this.debugMode) {
+                            console.warn('Could not find bodyContainer for expanded item:', item.id);
+                        }
+                        
+                        // Recipient HTML
+                        if (item.isEmailCategory) {
+                            ['to', 'cc', 'bcc'].forEach(type => {
+                                const container = this.template.querySelector(`[data-expanded-${type}="${item.id}"]`);
+                                if (container && item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`] && container.dataset.rendered !== 'true') {
+                                    container.innerHTML = item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`];
+                                    container.dataset.rendered = 'true';
+                                }
+                            });
+                        }
+                        
+                        if (item.historyExpanded && item.historyBody) {
+                            const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
+                            if (historyContainer && historyContainer.dataset.rendered !== 'true') {
+                                historyContainer.innerHTML = item.historyBody;
+                                historyContainer.dataset.rendered = 'true';
+                            }
+                        }
+                        const attachContainer = this.template.querySelector(`[data-attachments-id="${item.id}"]`);
+                        if (attachContainer && item.attachmentsHtml && attachContainer.dataset.rendered !== 'true') {
+                            attachContainer.innerHTML = item.attachmentsHtml;
+                            attachContainer.dataset.rendered = 'true';
+                        }
+                    } 
+                    
+                    // 2. COLLAPSED VIEW
+                    else if (this.showAttachmentsCollapsed) {
+                        const collapsedAttachContainer = this.template.querySelector(`[data-attachments-collapsed-id="${item.id}"]`);
+                        if (collapsedAttachContainer && item.attachmentsHtml && collapsedAttachContainer.dataset.rendered !== 'true') {
+                            collapsedAttachContainer.innerHTML = item.attachmentsHtml;
+                            collapsedAttachContainer.dataset.rendered = 'true';
+                            collapsedAttachContainer.addEventListener('click', (e) => e.stopPropagation());
+                        }
                     }
                     
-                    // Recipient HTML
-                    if (item.isEmailCategory) {
-                        ['to', 'cc', 'bcc'].forEach(type => {
-                            const container = this.template.querySelector(`[data-expanded-${type}="${item.id}"]`);
+                    // 3. POPOVER
+                    if (item.showEmailInfo && item.isEmailCategory) {
+                        ['to', 'cc', 'bcc', 'from'].forEach(type => {
+                            const container = this.template.querySelector(`[data-popover-${type}="${item.id}"]`);
                             if (container && item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`] && container.dataset.rendered !== 'true') {
                                 container.innerHTML = item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`];
                                 container.dataset.rendered = 'true';
                             }
                         });
                     }
-                    
-                    if (item.historyExpanded && item.historyBody) {
-                        const historyContainer = this.template.querySelector(`[data-history-id="${item.id}"]`);
-                        if (historyContainer && historyContainer.dataset.rendered !== 'true') {
-                            historyContainer.innerHTML = item.historyBody;
-                            historyContainer.dataset.rendered = 'true';
-                        }
-                    }
-                    const attachContainer = this.template.querySelector(`[data-attachments-id="${item.id}"]`);
-                    if (attachContainer && item.attachmentsHtml && attachContainer.dataset.rendered !== 'true') {
-                        attachContainer.innerHTML = item.attachmentsHtml;
-                        attachContainer.dataset.rendered = 'true';
-                    }
-                } 
-                
-                // 2. COLLAPSED VIEW
-                else if (this.showAttachmentsCollapsed) {
-                    const collapsedAttachContainer = this.template.querySelector(`[data-attachments-collapsed-id="${item.id}"]`);
-                    if (collapsedAttachContainer && item.attachmentsHtml && collapsedAttachContainer.dataset.rendered !== 'true') {
-                        collapsedAttachContainer.innerHTML = item.attachmentsHtml;
-                        collapsedAttachContainer.dataset.rendered = 'true';
-                        collapsedAttachContainer.addEventListener('click', (e) => e.stopPropagation());
-                    }
-                }
-                
-                // 3. POPOVER
-                if (item.showEmailInfo && item.isEmailCategory) {
-                    ['to', 'cc', 'bcc', 'from'].forEach(type => {
-                        const container = this.template.querySelector(`[data-popover-${type}="${item.id}"]`);
-                        if (container && item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`] && container.dataset.rendered !== 'true') {
-                            container.innerHTML = item[`email${type.charAt(0).toUpperCase() + type.slice(1)}`];
-                            container.dataset.rendered = 'true';
-                        }
-                    });
+                } catch (e) {
+                    if (this.debugMode) console.error('Error in renderedCallback loop for item ' + item.id, e);
                 }
             });
         }

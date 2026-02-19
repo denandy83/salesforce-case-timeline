@@ -251,44 +251,18 @@ public without sharing class ND_CaseTimelineController {
         // We increase the buffer significantly to handle cases with many items having identical timestamps.
         Integer queryLimit = limitSize * 3;
 
-        String emailQuery = 'SELECT Id, Subject, HtmlBody, TextBody, MessageDate, FromName, FromAddress, ' +
-                           'ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming ' +
-                           'FROM EmailMessage ' +
-                           'WHERE ParentId = :caseId AND Status != \'5\' AND MessageDate ' + operator + ' :queryDate ' +
-                           'ORDER BY MessageDate ' + emailOrder + ', Id ' + emailOrder + ' LIMIT :queryLimit';
-        
-        if (debugMode) {
-            System.debug('Email Query: ' + emailQuery);
-            System.debug('Query Date: ' + queryDate);
-        }
+        // 1. SKELETON QUERIES (Lightweight)
+        List<EmailMessage> emailSkeletons = Database.query('SELECT Id, MessageDate FROM EmailMessage WHERE ParentId = :caseId AND Status != \'5\' AND MessageDate ' + operator + ' :queryDate ORDER BY MessageDate ' + emailOrder + ', Id ' + emailOrder + ' LIMIT :queryLimit');
+        List<FeedItem> feedSkeletons = Database.query('SELECT Id, CreatedDate FROM FeedItem WHERE ParentId = :caseId AND Type != \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate ORDER BY CreatedDate ' + feedOrder + ', Id ' + feedOrder + ' LIMIT :queryLimit');
 
-        List<EmailMessage> emailCandidates = Database.query(emailQuery);
-        
-        String feedQuery = 'SELECT Id, Body, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText, ' +
-                          '(SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges), ' +
-                          '(SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN (\'InlineImage\', \'Content\')) ' +
-                          'FROM FeedItem ' +
-                          'WHERE ParentId = :caseId AND Type != \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate ' +
-                          'ORDER BY CreatedDate ' + feedOrder + ', Id ' + feedOrder + ' LIMIT :queryLimit';
-        
-        if (debugMode) {
-            System.debug('Feed Query: ' + feedQuery);
-        }
-
-        List<FeedItem> feedCandidates = Database.query(feedQuery);
-
-        List<SObject> combinedRaw = new List<SObject>();
-        combinedRaw.addAll((List<SObject>)emailCandidates);
-        combinedRaw.addAll((List<SObject>)feedCandidates);
-
+        // 2. MEMORY SORT & SLICE
         List<RawItemWrapper> wrappers = new List<RawItemWrapper>();
-        for(SObject obj : combinedRaw) {
-            wrappers.add(new RawItemWrapper(obj, sortDirection));
-        }
+        for(EmailMessage em : emailSkeletons) wrappers.add(new RawItemWrapper(em, sortDirection));
+        for(FeedItem fi : feedSkeletons) wrappers.add(new RawItemWrapper(fi, sortDirection));
         wrappers.sort();
         
-        List<EmailMessage> finalEmails = new List<EmailMessage>();
-        List<FeedItem> finalFeeds = new List<FeedItem>();
+        List<Id> selectedEmailIds = new List<Id>();
+        List<Id> selectedFeedIds = new List<Id>();
 
         Integer count = 0;
         for(RawItemWrapper w : wrappers) {
@@ -297,80 +271,145 @@ public without sharing class ND_CaseTimelineController {
             // CURSOR LOGIC: Skip items we have already seen
             if (referenceDate != null && w.sortDate == referenceDate && String.isNotBlank(lastSeenId)) {
                 if (sortDirection == 'desc') {
-                    // DESC: We want items (Date < Ref) OR (Date == Ref AND Id < LastId)
-                    // So if Id >= LastId, we have seen it (or it came before/at the cut-off).
                     if ((String)w.obj.Id >= lastSeenId) continue;
                 } else {
-                    // ASC: We want items (Date > Ref) OR (Date == Ref AND Id > LastId)
-                    // So if Id <= LastId, we have seen it.
                     if ((String)w.obj.Id <= lastSeenId) continue;
                 }
             }
             
-            if (w.obj instanceof EmailMessage) finalEmails.add((EmailMessage)w.obj);
-            else finalFeeds.add((FeedItem)w.obj);
+            if (w.obj instanceof EmailMessage) selectedEmailIds.add(w.obj.Id);
+            else selectedFeedIds.add(w.obj.Id);
             count++;
         }
         
-        // Memory optimization: Clear large raw lists before processing
-        combinedRaw = null;
-        wrappers = null;
+        wrappers = null; // Clear memory
 
-        Map<Id, ConnectApi.FeedItem> connectMap = new Map<Id, ConnectApi.FeedItem>();
+        // 3. METADATA & CONTEXT PREPARATION (Single Query for efficiency)
+        List<EmailMessage> emailMeta = new List<EmailMessage>();
+        if (!selectedEmailIds.isEmpty()) {
+             emailMeta = [SELECT Id, Subject, MessageDate, FromName, FromAddress, 
+                           ToAddress, CcAddress, BccAddress, CreatedBy.Name, Incoming 
+                           FROM EmailMessage 
+                           WHERE Id IN :selectedEmailIds];
+        }
+
+        List<FeedItem> feedMeta = new List<FeedItem>();
+        if (!selectedFeedIds.isEmpty()) {
+             feedMeta = [SELECT Id, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText 
+                          FROM FeedItem 
+                          WHERE Id IN :selectedFeedIds];
+        }
+
+        Context ctx = new Context();
+        ctx.baseUrl = getBaseUrl();
+        ctx.fileBaseUrl = getFileBaseUrl();
+        ctx.statusMap = getStatusMap();
+        ctx.sortDirection = sortDirection;
+        ctx.connectMap = new Map<Id, ConnectApi.FeedItem>();
+        ctx.emailIdToFeedItemId = new Map<Id, Id>();
+
         List<String> idsToEnrich = new List<String>();
-        Map<Id, Id> emailIdToFeedItemId = new Map<Id, Id>();
-        
-        // 1. Add standard feed items to enrichment
-        for (FeedItem fi : finalFeeds) {
+        for (FeedItem fi : feedMeta) {
             if (fi.Type == 'TextPost' || fi.Type == 'ContentPost' || fi.Type == 'LinkPost' || fi.Type == 'AdvancedTextPost' || fi.Type == 'CaseCommentPost') {
                 idsToEnrich.add(fi.Id);
             }
         }
-
-        // 2. Add EmailMessageEvent items 
-        // Note: For EmailMessageEvents, we also need to be careful with pagination if they were the boundary, 
-        // but typically they are fetched ad-hoc here. We keep the original logic for simplicity unless deep paging hits them.
         List<FeedItem> emailEvents = Database.query(
             'SELECT Id FROM FeedItem WHERE ParentId = :caseId AND Type = \'EmailMessageEvent\' AND CreatedDate ' + operator + ' :queryDate LIMIT :limitSize'
         );
-        for(FeedItem fi : emailEvents) {
-            idsToEnrich.add(fi.Id);
-        }
+        for(FeedItem fi : emailEvents) idsToEnrich.add(fi.Id);
 
         if (!idsToEnrich.isEmpty()) {
             try {
-                if (debugMode) System.debug('Enriching ' + idsToEnrich.size() + ' items via ConnectApi.');
-                
                 // Chunk requests to avoid ConnectApi 100-item limit
                 Integer batchSizeConnect = 100;
                 for (Integer i = 0; i < idsToEnrich.size(); i += batchSizeConnect) {
                     Integer endIndex = Math.min(i + batchSizeConnect, idsToEnrich.size());
                     List<String> batchIds = new List<String>();
-                    for (Integer j = i; j < endIndex; j++) {
-                        batchIds.add(idsToEnrich[j]);
-                    }
+                    for (Integer j = i; j < endIndex; j++) batchIds.add(idsToEnrich[j]);
 
                     List<ConnectApi.BatchResult> results = ConnectApi.ChatterFeeds.getFeedElementBatch(null, batchIds);
                     for (ConnectApi.BatchResult result : results) {
-                        if (result.isSuccess()) {
-                            Object res = result.getResult();
-                            if (res instanceof ConnectApi.FeedItem) {
-                                ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)res;
-                                connectMap.put(cfi.id, cfi);
-                                
-                                if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
-                                    emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
-                                }
+                        if (result.isSuccess() && result.getResult() instanceof ConnectApi.FeedItem) {
+                            ConnectApi.FeedItem cfi = (ConnectApi.FeedItem)result.getResult();
+                            ctx.connectMap.put(cfi.id, cfi);
+                            if (cfi.capabilities != null && cfi.capabilities.emailMessage != null) {
+                                ctx.emailIdToFeedItemId.put(cfi.capabilities.emailMessage.emailMessageId, cfi.id);
                             }
-                        } else {
-                            if (debugMode) System.debug('ConnectApi Batch Error: ' + result.getErrorMessage());
                         }
                     }
                 }
             } catch (Exception e) { System.debug('ConnectAPI Error: ' + e.getMessage()); }
         }
 
-        return processItems(finalEmails, finalFeeds, connectMap, emailIdToFeedItemId, sortDirection);
+        // 4. CHUNKED PROCESSING (The Heavy Lifting)
+        List<TimelineItem> combinedList = new List<TimelineItem>();
+        Integer chunkSize = 10;
+
+        // 4a. Process Emails
+        for (Integer i = 0; i < selectedEmailIds.size(); i += chunkSize) {
+            List<Id> batchIds = new List<Id>();
+            for (Integer j = i; j < Math.min(i + chunkSize, selectedEmailIds.size()); j++) batchIds.add(selectedEmailIds[j]);
+            
+            // Query Bodies
+            Map<Id, EmailMessage> bodyMap = new Map<Id, EmailMessage>([SELECT Id, HtmlBody, TextBody FROM EmailMessage WHERE Id IN :batchIds]);
+            
+            // Merge Bodies into Metadata Objects for processing
+            List<EmailMessage> batchEmails = new List<EmailMessage>();
+            for (EmailMessage m : emailMeta) {
+                if (bodyMap.containsKey(m.Id)) {
+                    m.HtmlBody = bodyMap.get(m.Id).HtmlBody;
+                    m.TextBody = bodyMap.get(m.Id).TextBody;
+                    batchEmails.add(m);
+                }
+            }
+            
+            prepareContext(ctx, batchEmails, new List<FeedItem>());
+            combinedList.addAll(transformEmails(batchEmails, ctx)); // Now strips history
+            
+            // Clear memory
+            for (EmailMessage m : batchEmails) { m.HtmlBody = null; m.TextBody = null; }
+            bodyMap = null;
+        }
+
+        // 4b. Process Feeds
+        for (Integer i = 0; i < selectedFeedIds.size(); i += chunkSize) {
+            List<Id> batchIds = new List<Id>();
+            for (Integer j = i; j < Math.min(i + chunkSize, selectedFeedIds.size()); j++) batchIds.add(selectedFeedIds[j]);
+            
+            List<FeedItem> chunkFeeds = [SELECT Id, CreatedDate, CreatedBy.Name, Type, Visibility, Title, Status, IsRichText, Body, 
+                          (SELECT FieldName, OldValue, NewValue FROM FeedTrackedChanges), 
+                          (SELECT Id, RecordId, Type, Title FROM FeedAttachments WHERE Type IN ('InlineImage', 'Content')) 
+                          FROM FeedItem 
+                          WHERE Id IN :batchIds];
+            
+            prepareContext(ctx, new List<EmailMessage>(), chunkFeeds);
+            combinedList.addAll(transformFeedItems(chunkFeeds, ctx));
+        }
+
+        combinedList.sort();
+        return combinedList;
+    }
+
+    // NEW: On-Demand History Fetcher
+    @AuraEnabled
+    public static String getEmailHistory(Id emailId) {
+        if (emailId == null) return null;
+        try {
+            EmailMessage em = [SELECT HtmlBody, TextBody FROM EmailMessage WHERE Id = :emailId LIMIT 1];
+            String body = String.isNotBlank(em.HtmlBody) ? em.HtmlBody : em.TextBody;
+            if (String.isBlank(body)) return null;
+            
+            Matcher m = getHistoryPattern().matcher(body);
+            if (m.find()) {
+                String history = body.substring(m.start());
+                Context ctx = new Context();
+                ctx.baseUrl = getBaseUrl(); ctx.fileBaseUrl = getFileBaseUrl();
+                // We do minimal processing for history to ensure images/links work
+                return fixRelativeImageUrls(history, ctx.baseUrl, ctx.fileBaseUrl, new Map<String, String>(), null); 
+            }
+        } catch (Exception e) { System.debug('Error fetching history: ' + e.getMessage()); }
+        return null;
     }
 
     public class RawItemWrapper implements Comparable {
@@ -387,20 +426,14 @@ public without sharing class ND_CaseTimelineController {
         
         public Integer compareTo(Object compareTo) {
             RawItemWrapper other = (RawItemWrapper) compareTo;
-            // DESC: newer items first (larger dates = -1)
-            // ASC: older items first (smaller dates = -1)
             if (this.sortDir == 'asc') {
                 if (this.sortDate < other.sortDate) return -1;
                 if (this.sortDate > other.sortDate) return 1;
-                
-                // Tie-breaker: ID ASC
                 if ((String)this.obj.Id < (String)other.obj.Id) return -1;
                 if ((String)this.obj.Id > (String)other.obj.Id) return 1;
             } else {
                 if (this.sortDate < other.sortDate) return 1;
                 if (this.sortDate > other.sortDate) return -1;
-                
-                // Tie-breaker: ID DESC
                 if ((String)this.obj.Id < (String)other.obj.Id) return 1;
                 if ((String)this.obj.Id > (String)other.obj.Id) return -1;
             }
@@ -417,7 +450,6 @@ public without sharing class ND_CaseTimelineController {
         public String sortDirection;
         public Map<Id, ConnectApi.FeedItem> connectMap;
         public Map<Id, Id> emailIdToFeedItemId;
-        
         public Map<String, EmailRecordMatch> emailToRecordMap;
         public Map<String, String> documentIdToVersionId;
         public Map<String, String> versionIdToDocumentId;
@@ -449,6 +481,15 @@ public without sharing class ND_CaseTimelineController {
     }
 
     private static void prepareContext(Context ctx, List<EmailMessage> emails, List<FeedItem> feedItems) {
+        if (ctx.emailToRecordMap == null) ctx.emailToRecordMap = new Map<String, EmailRecordMatch>();
+        if (ctx.documentIdToVersionId == null) ctx.documentIdToVersionId = new Map<String, String>();
+        if (ctx.versionIdToDocumentId == null) ctx.versionIdToDocumentId = new Map<String, String>();
+        if (ctx.docIdToTitle == null) ctx.docIdToTitle = new Map<String, String>();
+        if (ctx.docIdToExtension == null) ctx.docIdToExtension = new Map<String, String>();
+        if (ctx.commentsMap == null) ctx.commentsMap = new Map<Id, List<CommentItem>>();
+        if (ctx.emailAttachments == null) ctx.emailAttachments = new Map<Id, List<ContentDocumentLink>>();
+        if (ctx.emailLegacyAttachments == null) ctx.emailLegacyAttachments = new Map<Id, List<Attachment>>();
+
         Set<String> allEmailAddresses = new Set<String>();
         Set<Id> emailIds = new Set<Id>();
         for (EmailMessage em : emails) {
@@ -458,34 +499,36 @@ public without sharing class ND_CaseTimelineController {
             if (String.isNotBlank(em.BccAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.BccAddress));
             if (String.isNotBlank(em.FromAddress)) allEmailAddresses.addAll(extractEmailAddresses(em.FromAddress));
         }
-        ctx.emailToRecordMap = buildEmailToRecordMap(allEmailAddresses);
+        if (!allEmailAddresses.isEmpty()) {
+            Map<String, EmailRecordMatch> newMatches = buildEmailToRecordMap(allEmailAddresses);
+            for (String addr : newMatches.keySet()) if (!ctx.emailToRecordMap.containsKey(addr)) ctx.emailToRecordMap.put(addr, newMatches.get(addr));
+        }
 
-        Set<String> contentDocIds = new Set<String>();
-        Set<String> contentVersionIds = new Set<String>();
         Set<Id> allFeedIds = new Set<Id>();
         for (FeedItem fi : feedItems) allFeedIds.add(fi.Id);
         if (ctx.emailIdToFeedItemId != null) {
-            for (Id emId : ctx.emailIdToFeedItemId.keySet()) {
-                if (emailIds.contains(emId)) allFeedIds.add(ctx.emailIdToFeedItemId.get(emId));
+            for (EmailMessage em : emails) {
+                if (ctx.emailIdToFeedItemId.containsKey(em.Id)) allFeedIds.add(ctx.emailIdToFeedItemId.get(em.Id));
             }
         }
 
-        List<FeedComment> allComments = new List<FeedComment>();
         if (!allFeedIds.isEmpty()) {
-            allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name FROM FeedComment WHERE FeedItemId IN :allFeedIds ORDER BY CreatedDate ASC];
-        }
-
-        Pattern idPattern = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}\\b');
-        for (FeedComment fc : allComments) {
-            if (String.isNotBlank(fc.CommentBody)) {
-                Matcher m = idPattern.matcher(fc.CommentBody);
-                while (m.find()) {
-                    String rid = m.group();
-                    if (rid.startsWith('069')) contentDocIds.add(rid);
-                    else if (rid.startsWith('068')) contentVersionIds.add(rid);
+            List<FeedComment> allComments = [SELECT Id, FeedItemId, CommentBody, CreatedDate, CreatedBy.Name FROM FeedComment WHERE FeedItemId IN :allFeedIds ORDER BY CreatedDate ASC];
+            for (FeedComment fc : allComments) {
+                if (!ctx.commentsMap.containsKey(fc.FeedItemId)) ctx.commentsMap.put(fc.FeedItemId, new List<CommentItem>());
+                String processedBody = fc.CommentBody;
+                if (String.isNotBlank(processedBody)) {
+                    processedBody = fixRelativeImageUrls(processedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
+                    processedBody = makeImagesClickable(processedBody, ctx.versionIdToDocumentId);
                 }
+                ctx.commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
             }
         }
+
+        Set<String> contentDocIds = new Set<String>();
+        Set<String> contentVersionIds = new Set<String>();
+        Pattern idPattern = Pattern.compile('(069|068|00P)[a-zA-Z0-9]{12,15}\b');
+        
         for (FeedItem cf : feedItems) {
             if (cf.FeedAttachments != null) {
                 for (FeedAttachment fa : cf.FeedAttachments) {
@@ -498,65 +541,33 @@ public without sharing class ND_CaseTimelineController {
             }
             if (String.isNotBlank(cf.Body)) {
                 Matcher m = idPattern.matcher(cf.Body);
-                while (m.find()) {
-                    String rid = m.group();
-                    if (rid.startsWith('069')) contentDocIds.add(rid);
-                    else if (rid.startsWith('068')) contentVersionIds.add(rid);
-                }
+                while (m.find()) { String rid = m.group(); if (rid.startsWith('069')) contentDocIds.add(rid); else if (rid.startsWith('068')) contentVersionIds.add(rid); }
             }
         }
         for (EmailMessage em : emails) {
             if (String.isNotBlank(em.HtmlBody)) {
-                Matcher m = idPattern.matcher(em.HtmlBody);
-                while (m.find()) {
-                    String rid = m.group();
+                Set<String> bodyIds = getUsedInlineIds(em.HtmlBody);
+                for (String rid : bodyIds) {
                     if (rid.startsWith('069')) contentDocIds.add(rid);
                     else if (rid.startsWith('068')) contentVersionIds.add(rid);
                 }
             }
         }
 
-        ctx.documentIdToVersionId = new Map<String, String>();
-        ctx.versionIdToDocumentId = new Map<String, String>();
-        ctx.docIdToTitle = new Map<String, String>();
-        ctx.docIdToExtension = new Map<String, String>();
-
         if (!contentDocIds.isEmpty() || !contentVersionIds.isEmpty()) {
             try {
-                for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds) AND IsLatest = true]) {
-                    String docId = cv.ContentDocumentId;
-                    String verId = cv.Id;
-                    
-                    // Store BOTH 15 and 18 char versions for robust lookup
-                    ctx.documentIdToVersionId.put(docId, verId);
-                    ctx.documentIdToVersionId.put(docId.substring(0, 15), verId);
-                    
-                    ctx.versionIdToDocumentId.put(verId, docId);
-                    ctx.versionIdToDocumentId.put(verId.substring(0, 15), docId);
-                    
-                    ctx.docIdToTitle.put(docId, cv.Title);
-                    ctx.docIdToTitle.put(docId.substring(0, 15), cv.Title);
-                    ctx.docIdToExtension.put(docId, cv.FileExtension);
-                    ctx.docIdToExtension.put(docId.substring(0, 15), cv.FileExtension);
+                for (ContentVersion cv : [SELECT Id, ContentDocumentId, Title, FileExtension FROM ContentVersion WHERE (ContentDocumentId IN :contentDocIds OR Id IN :contentVersionIds)]) {
+                    String docId = cv.ContentDocumentId; String verId = cv.Id;
+                    ctx.documentIdToVersionId.put(docId, verId); ctx.documentIdToVersionId.put(docId.substring(0, 15), verId);
+                    ctx.versionIdToDocumentId.put(verId, docId); ctx.versionIdToDocumentId.put(verId.substring(0, 15), docId);
+                    ctx.docIdToTitle.put(docId, cv.Title); ctx.docIdToTitle.put(docId.substring(0, 15), cv.Title);
+                    ctx.docIdToExtension.put(docId, cv.FileExtension); ctx.docIdToExtension.put(docId.substring(0, 15), cv.FileExtension);
                 }
             } catch (Exception e) {
                 System.debug('Error querying ContentVersion: ' + e.getMessage());
             }
         }
 
-        ctx.commentsMap = new Map<Id, List<CommentItem>>();
-        for (FeedComment fc : allComments) {
-            if (!ctx.commentsMap.containsKey(fc.FeedItemId)) ctx.commentsMap.put(fc.FeedItemId, new List<CommentItem>());
-            String processedBody = fc.CommentBody;
-            if (String.isNotBlank(processedBody)) {
-                processedBody = fixRelativeImageUrls(processedBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, null);
-                processedBody = makeImagesClickable(processedBody, ctx.versionIdToDocumentId);
-            }
-            ctx.commentsMap.get(fc.FeedItemId).add(new CommentItem(fc.Id, processedBody, fc.CreatedBy.Name, fc.CreatedDate));
-        }
-
-        ctx.emailAttachments = new Map<Id, List<ContentDocumentLink>>();
-        ctx.emailLegacyAttachments = new Map<Id, List<Attachment>>();
         if (!emailIds.isEmpty()) {
             for (ContentDocumentLink link : [SELECT Id, ContentDocumentId, LinkedEntityId, ContentDocument.Title, ContentDocument.FileExtension FROM ContentDocumentLink WHERE LinkedEntityId IN :emailIds]) {
                 if (!ctx.emailAttachments.containsKey(link.LinkedEntityId)) ctx.emailAttachments.put(link.LinkedEntityId, new List<ContentDocumentLink>());
@@ -571,6 +582,8 @@ public without sharing class ND_CaseTimelineController {
 
     private static List<TimelineItem> transformEmails(List<EmailMessage> emails, Context ctx) {
         List<TimelineItem> results = new List<TimelineItem>();
+        Pattern historyPattern = getHistoryPattern();
+        
         for (EmailMessage em : emails) {
             TimelineItem item = new TimelineItem();
             item.id = em.Id;
@@ -589,12 +602,27 @@ public without sharing class ND_CaseTimelineController {
             item.emailSubject = em.Subject;
 
             List<Attachment> availableAtts = ctx.emailLegacyAttachments.get(em.Id);
+            String fullBody = (String.isNotBlank(em.HtmlBody)) ? em.HtmlBody : ((em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '');
+            
+            // HISTORY STRIPPING logic
+            item.hasHistory = false;
+            item.historyBody = null; 
+            
+            String newContent = fullBody;
+            if (String.isNotBlank(fullBody)) {
+                Matcher m = historyPattern.matcher(fullBody);
+                if (m.find()) {
+                    newContent = fullBody.substring(0, m.start());
+                    item.hasHistory = true;
+                }
+            }
+
             try {
-                if (String.isNotBlank(em.HtmlBody)) {
-                    String processed = fixRelativeImageUrls(em.HtmlBody, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
+                if (String.isNotBlank(newContent)) {
+                    String processed = fixRelativeImageUrls(newContent, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
                     item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
                 } else {
-                    item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '';
+                    item.body = '';
                 }
             } catch (Exception e) {
                 System.debug('Error processing email body for ' + em.Id + ': ' + e.getMessage());
@@ -602,7 +630,7 @@ public without sharing class ND_CaseTimelineController {
             }
 
             // Attachments (Definitive Exclusion)
-            Set<String> rawInlineIds = getUsedInlineIds(item.body);
+            Set<String> rawInlineIds = getUsedInlineIds(fullBody);
             Set<String> inlineIds = new Set<String>();
             
             // Map every detected ID to BOTH its Version and Document counterparts
@@ -632,11 +660,27 @@ public without sharing class ND_CaseTimelineController {
                     
                     if (isHtml) {
                         isUsed = inlineIds.contains(docId) || inlineIds.contains(docId.substring(0, 15));
+                        
                         // SUPPRESSION LAYER 2: Check Version ID too
-                        if (!isUsed && ctx.documentIdToVersionId.containsKey(docId)) {
-                            String verId = ctx.documentIdToVersionId.get(docId);
-                            if (inlineIds.contains(verId) || inlineIds.contains(verId.substring(0, 15))) isUsed = true;
+                        // Fix: Check if ANY inline ID maps to this Doc ID (handles Version mismatch)
+                        if (!isUsed) {
+                            for (String inlineId : rawInlineIds) { // Iterate raw IDs found in body
+                                if (ctx.versionIdToDocumentId.containsKey(inlineId) && ctx.versionIdToDocumentId.get(inlineId) == docId) {
+                                    isUsed = true; 
+                                    break;
+                                }
+                                // Check 15-char key if raw was 18-char or vice-versa? Map has both.
+                                // Just check substring to be safe
+                                if (inlineId.length() >= 15) {
+                                    String shortId = inlineId.substring(0, 15);
+                                    if (ctx.versionIdToDocumentId.containsKey(shortId) && ctx.versionIdToDocumentId.get(shortId) == docId) {
+                                        isUsed = true;
+                                        break;
+                                    }
+                                }
+                            }
                         }
+                        
                         // Fallback to name match only if name is distinctive
                         String title = link.ContentDocument.Title;
                         if (!isUsed && String.isNotBlank(title) && title.length() > 5 && bodyLower.contains(title.toLowerCase())) isUsed = true;
@@ -666,8 +710,6 @@ public without sharing class ND_CaseTimelineController {
                 }
             }
             item.attachmentsHtml = (!cards.isEmpty()) ? '<div style="margin-top:10px; padding-top:6px; border-top:1px solid #e5e5e5;">' + String.join(cards, '') + '</div>' : '';
-            item.hasHistory = false;
-            item.historyBody = '';
 
             if (ctx.emailIdToFeedItemId != null && ctx.emailIdToFeedItemId.containsKey(em.Id)) {
                 Id feedId = ctx.emailIdToFeedItemId.get(em.Id);
@@ -715,7 +757,7 @@ public without sharing class ND_CaseTimelineController {
             item.attachmentsHtml = getFeedAttachmentsHtml(soqlFeedItem, ctx.versionIdToDocumentId, ctx.docIdToTitle, ctx.docIdToExtension);
 
             String parsedResult = null;
-            if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"'))) parsedResult = parseFeedEventString(formattedBody, ctx.statusMap);
+            if (String.isNotBlank(formattedBody) && (formattedBody.containsIgnoreCase('feedEvent') || formattedBody.contains('{"fu"}'))) parsedResult = parseFeedEventString(formattedBody, ctx.statusMap);
 
             if (parsedResult != null) item.body = parsedResult;
             else if (connectFeedItem != null) {
@@ -792,8 +834,8 @@ public without sharing class ND_CaseTimelineController {
             objectName = 'Attachment';
         }
 
-        return '<a href="/lightning/r/' + objectName + '/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-flex; align-items:center; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' +
-            '<span style="margin-right:6px; font-size:1.1em;">' + fileIcon + '</span>' + fileName +
+        return '<a href="/lightning/r/' + objectName + '/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-flex; align-items:center; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' + 
+            '<span style="margin-right:6px; font-size:1.1em;">' + fileIcon + '</span>' + fileName + 
             '</a>';
     }
 
@@ -938,7 +980,7 @@ public without sharing class ND_CaseTimelineController {
                     String cleanId = id.substring(0, 15);
                     if (cleanId.startsWith('00P')) {
                          newSrc = fileBaseUrl + '/servlet/servlet.FileDownload?file=' + cleanId;
-                    } else if (documentIdToVersionId.containsKey(cleanId)) {
+                    } else if (documentIdToVersionId != null && documentIdToVersionId.containsKey(cleanId)) {
                          newSrc = fileBaseUrl + '/sfc/servlet.shepherd/version/renditionDownload?rendition=THUMB720BY480&versionId=' + documentIdToVersionId.get(cleanId) + '&operationContext=CHATTER&contentId=' + cleanId;
                     }
                 }
@@ -1003,7 +1045,7 @@ public without sharing class ND_CaseTimelineController {
 
     @TestVisible private static Map<String, String> getStatusMap() {
         Map<String, String> m = new Map<String, String>(); m.put('1', 'New'); m.put('2', 'On Hold'); m.put('3', 'Closed'); m.put('6', 'Open'); m.put('7', 'Working'); m.put('8', 'Waiting for Customer'); m.put('9', 'Solved'); m.put('10', 'Merged');
-        try { for(Schema.PicklistEntry f : Case.Status.getDescribe().getPicklistValues()) { m.put(f.getValue(), f.getLabel()); m.put(f.getLabel(), f.getLabel()); } } catch (Exception e) { }
+        try { for(Schema.PicklistEntry f : Case.Status.getDescribe().getPicklistValues()) { m.put(f.getValue(), f.getLabel()); m.put(f.getLabel(), f.getLabel()); } } catch (Exception e) { } 
         return m;
     }
     @TestVisible private static String formatSystemTitle(String type) { if (type == 'TrackedChange') return 'Field Update'; if (type == 'ChangeStatusPost') return 'Status Changed'; if (type == 'CreateRecordEvent') return 'Record Created'; return type; }
@@ -1034,9 +1076,11 @@ public without sharing class ND_CaseTimelineController {
             // 3. Try to get Version ID from query param
             else if (srcUrl.contains('versionId=')) {
                 String versionId = extractParam(srcUrl, 'versionId=');
-                docId = versionIdToDocId.get(versionId);
-                if (docId == null && versionId != null && versionId.length() >= 15) {
-                    docId = versionIdToDocId.get(versionId.substring(0, 15));
+                if (versionIdToDocId != null) {
+                    docId = versionIdToDocId.get(versionId);
+                    if (docId == null && versionId != null && versionId.length() >= 15) {
+                        docId = versionIdToDocId.get(versionId.substring(0, 15));
+                    }
                 }
             }
             // 4. Try to get Version ID from REST path (e.g. /version/download/068...)
@@ -1046,7 +1090,7 @@ public without sharing class ND_CaseTimelineController {
                 if (versionId.contains('/')) versionId = versionId.substringBefore('/');
                 if (versionId.contains('?')) versionId = versionId.substringBefore('?');
                 
-                if (String.isNotBlank(versionId)) {
+                if (String.isNotBlank(versionId) && versionIdToDocId != null) {
                     docId = versionIdToDocId.get(versionId);
                     if (docId == null && versionId.length() >= 15) {
                         docId = versionIdToDocId.get(versionId.substring(0, 15));
@@ -1349,11 +1393,11 @@ styledCode = styledCode.replaceAll(
                 EmailRecordMatch match = emailMap.get(lookupEmail);
                 // Create clickable link with data attribute for navigation
                 enrichedParts.add(
-                    '<a href="/' + match.recordId + '" ' +
-                    'class="email-recipient-link" ' +
-                    'data-record-id="' + match.recordId + '" ' +
-                    'style="color:#0176d3; text-decoration:none;">' +
-                    (displayName.contains('@') ? match.recordName : displayName) +
+                    '<a href="/' + match.recordId + '" '
+                    + 'class="email-recipient-link" '
+                    + 'data-record-id="' + match.recordId + '" '
+                    + 'style="color:#0176d3; text-decoration:none;">'
+                    + (displayName.contains('@') ? match.recordName : displayName) + 
                     '</a>'
                 );
             } else {
@@ -1363,5 +1407,16 @@ styledCode = styledCode.replaceAll(
         }
         
         return String.join(enrichedParts, ', ');
+    }
+    
+    private static Pattern getHistoryPattern() {
+        String p1 = 'On\\s+[A-Za-z]{3}.{0,200}?wrote:'; 
+        String p2 = '-{3,}\\s*(?:Original|Forwarded)\\s+Message\\s*-{3,}';
+        String p3 = '(?:From:|<b>From:</b>).{1,300}?(?:Sent:|<b>Sent:</b>)';
+        String p4 = 'From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)';
+        String p5 = 'De\\s*:.{1,100}?Envoy.{1,100}?:';
+        String p6 = '_{20,}';
+        String p7 = 'Da\\s*:.{1,100}?Inviato\\s*:'; 
+        return Pattern.compile('(?is)(' + p1 + '|' + p2 + '|' + p3 + '|' + p4 + '|' + p5 + '|' + p6 + '|' + p7 + ')');
     }
 }

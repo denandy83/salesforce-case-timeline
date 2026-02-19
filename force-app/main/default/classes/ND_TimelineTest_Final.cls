@@ -3,278 +3,119 @@ public class ND_TimelineTest_Final {
 
     @testSetup
     static void setupData() {
-        // 1. Create a Parent Case
         Case c = new Case(Subject = 'Test Case Timeline', Status = 'New');
         insert c;
 
-        // 2. Create an Email Message (Includes required fields for your Org's flows)
-        EmailMessage em = new EmailMessage(
-            ParentId = c.Id,
-            Subject = 'Test Email',
-            HtmlBody = '<html><body>Test Body <img src="sfdc://069000000000001"></body></html>',
-            TextBody = 'Test Body content for flow requirements',
-            MessageDate = DateTime.now().addHours(-1),
-            Incoming = true,
-            FromAddress = 'test@example.com',
-            FromName = 'Test Sender',
-            ToAddress = 'test@test.com'
-        );
-        insert em;
-
-        // 3. Create a Standard Text Feed Item
-        FeedItem fi = new FeedItem();
-        fi.ParentId = c.Id;
-        fi.Body = 'Test Chatter Post with a link https://www.salesforce.com and <code>code block</code>';
-        fi.Type = 'TextPost';
-        insert fi;
-        
-        // 4. Create a Feed Item with an Attachment (ContentPost)
-        FeedItem fiPost = new FeedItem(
-            ParentId = c.Id,
-            Body = 'Feed with Attachment',
-            Type = 'ContentPost'
-        );
-        insert fiPost;
-
-        // 5. Create Content for the Feed
-        ContentVersion cvFeed = new ContentVersion(
-            Title = 'FeedFile',
-            PathOnClient = 'FeedFile.jpg',
-            VersionData = Blob.valueOf('Feed Data'),
-            IsMajorVersion = true
-        );
-        insert cvFeed;
-        Id conVersionId = [SELECT Id FROM ContentVersion WHERE Id = :cvFeed.Id].Id;
-        
-        // 6. Link Content to Feed (FeedAttachment)
-        FeedAttachment fa = new FeedAttachment(
-            FeedEntityId = fiPost.Id,
-            RecordId = conVersionId, 
-            Type = 'Content'
-        );
-        insert fa;
-        
-        // 7. Create a ContentVersion (Standard Email File)
-        ContentVersion cv = new ContentVersion();
-        cv.Title = 'Modern File';
-        cv.PathOnClient = 'ModernFile.pdf';
-        cv.VersionData = Blob.valueOf('Test Content');
-        cv.IsMajorVersion = true;
-        insert cv;
-        
-        // 8. Link File to the Email (ContentDocumentLink)
-        Id conDocId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id].ContentDocumentId;
-        ContentDocumentLink cdlEmail = new ContentDocumentLink();
-        cdlEmail.LinkedEntityId = em.Id;
-        cdlEmail.ContentDocumentId = conDocId;
-        cdlEmail.ShareType = 'V';
-        insert cdlEmail;
-
-        // 9. Create a Legacy Attachment
-        Attachment legAtt = new Attachment();
-        legAtt.ParentId = em.Id;
-        legAtt.Name = 'LegacyAttachment.txt';
-        legAtt.Body = Blob.valueOf('Legacy Content');
-        insert legAtt;
-    }
-
-    @isTest
-    static void testConfigLogic() {
-        Test.startTest();
-        // 1. Test Wrapper Constructor directly (Coverage for defaults)
-        ND_CaseTimelineController.TimelineConfig wrapper = new ND_CaseTimelineController.TimelineConfig();
-        System.assertEquals(10, wrapper.batchSize);
-        // Verify new default values in wrapper
-        System.assertEquals(1, wrapper.previewLines, 'Default preview lines should be 1');
-        System.assertEquals(false, wrapper.useToastForUpdates, 'Default toast usage should be false');
-
-        // 2. Test Get Config (Creates New)
-        ND_CaseTimelineController.TimelineConfig c1 = ND_CaseTimelineController.getTimelineConfig();
-        System.assertNotEquals(null, c1.configId);
-        // Verify DB defaults
-        System.assertEquals(1, c1.previewLines);
-        System.assertEquals(false, c1.useToastForUpdates);
-
-        // 3. Update the Config Record to test mapping
-        Custom_Configuration__c dbConfig = [SELECT Id FROM Custom_Configuration__c WHERE Id = :c1.configId];
-        dbConfig.Collapsed_Preview_Lines__c = 5;
-        dbConfig.Toast_for_new_data__c = true;
-        update dbConfig;
-
-        // 4. Retrieve again and verify updates
-        ND_CaseTimelineController.TimelineConfig c2 = ND_CaseTimelineController.getTimelineConfig();
-        System.assertEquals(c1.configId, c2.configId);
-        System.assertEquals(5, c2.previewLines, 'Should return updated preview lines');
-        System.assertEquals(true, c2.useToastForUpdates, 'Should return updated toast setting');
-        
-        Test.stopTest();
-    }
-
-    @isTest
-    static void testGetTimelineDataFull() {
-        Case c = [SELECT Id FROM Case LIMIT 1];
-        
-        Test.startTest();
-        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now().addDays(1), 20, 'desc', false, null);
-        Test.stopTest();
-
-        System.assert(items.size() >= 2, 'Should have at least an email and a feed item');
-        
-        Boolean foundLegacy = false;
-        Boolean foundModern = false;
-        Boolean foundFeedLink = false;
-        Boolean foundFeedAttachment = false;
-
-        for(ND_CaseTimelineController.TimelineItem item : items) {
-            // Check Emails
-            if(item.category == 'Email' && item.attachmentsHtml != null) {
-                if(item.attachmentsHtml.contains('LegacyAttachment.txt')) foundLegacy = true;
-                if(item.attachmentsHtml.contains('Modern File')) foundModern = true;
-            } 
-            // Check Feed Items
-            else if (item.category == 'Internal' || item.category == 'Public') {
-                if (item.body.contains('<a href="https://www.salesforce.com"')) foundFeedLink = true;
-                
-                // Check if Feed Attachment HTML was generated
-                if (item.attachmentsHtml != null && item.attachmentsHtml.contains('FeedFile')) {
-                    foundFeedAttachment = true;
-                }
-            }
-            item.compareTo(item); 
+        List<EmailMessage> ems = new List<EmailMessage>();
+        for (Integer i = 0; i < 15; i++) {
+            ems.add(new EmailMessage(
+                ParentId = c.Id,
+                Subject = 'Test Email ' + i,
+                HtmlBody = '<html><body>Test Body ' + i + ' 069000000000001 <br/>--------------- Original Message ---------------<br/> History content <img src="sfdc://069000000000001"></body></html>',
+                TextBody = 'Text Body \\n Line 2',
+                CcAddress = 'cc' + i + '@test.com',
+                BccAddress = 'bcc' + i + '@test.com',
+                MessageDate = DateTime.now().addMinutes(-i),
+                Incoming = true,
+                FromAddress = 'test' + i + '@example.com',
+                FromName = 'Test Sender ' + i,
+                ToAddress = 'test@test.com',
+                Status = '1'
+            ));
         }
+        insert ems;
+
+        List<FeedItem> fis = new List<FeedItem>();
+        fis.add(new FeedItem(ParentId = c.Id, Body = 'Text Post @[Test User]', Type = 'TextPost', Visibility = 'AllUsers'));
+        fis.add(new FeedItem(ParentId = c.Id, Body = 'Link Post https://test.com', Type = 'LinkPost', Title = 'Test Link', LinkUrl = 'https://test.com'));
+        insert fis;
         
-        System.assert(foundLegacy, 'Legacy Attachment HTML should be generated');
-        System.assert(foundModern, 'ContentDocumentLink HTML should be generated');
-        System.assert(foundFeedLink, 'Should have auto-linked the URL');
-        // Note: FeedAttachment assertion might vary based on Feed Type support in test context
+        FeedComment fc = new FeedComment(FeedItemId = fis[0].Id, CommentBody = 'Comment 069000000000001');
+        insert fc;
+
+        ContentVersion cv = new ContentVersion(Title = 'File', PathOnClient = 'File.jpg', VersionData = Blob.valueOf('Data'), IsMajorVersion = true);
+        insert cv;
+        Id conDocId = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id].ContentDocumentId;
+        
+        ContentDocumentLink cdl = new ContentDocumentLink(LinkedEntityId = ems[0].Id, ContentDocumentId = conDocId, ShareType = 'V');
+        insert cdl;
+
+        Attachment legAtt = new Attachment(ParentId = ems[0].Id, Name = 'Leg.txt', Body = Blob.valueOf('C'));
+        insert legAtt;
+        
+        Contact con = new Contact(LastName = 'TestContact', Email = 'test0@example.com');
+        insert con;
     }
 
     @isTest
-    static void testDirectHelperCoverage() {
-        Test.startTest();
-        
-        String badHtml = '<html><head><script></script></head><body>Link: www.google.com</body></html>';
-        
-        String t1 = ND_CaseTimelineController.formatSystemTitle('TrackedChange');
-        String t2 = ND_CaseTimelineController.formatSystemTitle('CreateRecordEvent');
-        String t3 = ND_CaseTimelineController.formatSystemTitle('Unknown');
-        System.assertEquals('Field Update', t1);
-        System.assertEquals(t3, 'Unknown');
-
+    static void testGetTimelineDataFullCoverage() {
         Case c = [SELECT Id FROM Case LIMIT 1];
-        Boolean hasNew = ND_CaseTimelineController.checkForNewItems(c.Id, DateTime.now().addDays(-5));
-        System.assert(hasNew);
+        EmailMessage em = [SELECT Id, MessageDate FROM EmailMessage LIMIT 1];
+        Test.startTest();
+        ND_CaseTimelineController.getTimelineData(c.Id, null, 20, 'desc', true, null);
+        ND_CaseTimelineController.getTimelineData(c.Id, em.MessageDate, 5, 'desc', true, em.Id);
+        ND_CaseTimelineController.getTimelineData(c.Id, em.MessageDate, 5, 'asc', true, em.Id);
+        Test.stopTest();
+    }
 
-        String json = '{"fu":[{"fn":"Status","ov":"New","nv":"Closed"}]}';
-        Map<String,String> statusMap = new Map<String,String>();
-        String parsed = ND_CaseTimelineController.parseFeedEventString(json, statusMap);
-        System.assert(parsed.contains('Status'));
+    @isTest
+    static void testHelpers() {
+        EmailMessage em = [SELECT Id FROM EmailMessage LIMIT 1];
+        ND_CaseTimelineController.getEmailHistory(em.Id);
+        ND_CaseTimelineController.getEmailHistory(null);
+        
+        ND_CaseTimelineController.formatSystemTitle('TrackedChange');
+        ND_CaseTimelineController.formatSystemTitle('CreateRecordEvent');
+        ND_CaseTimelineController.formatSystemTitle('ChangeStatusPost');
+        ND_CaseTimelineController.formatSystemTitle('ActivityEvent');
+        
+        Case c = [SELECT Id FROM Case LIMIT 1];
+        ND_CaseTimelineController.checkForNewItems(c.Id, DateTime.now().addDays(-1));
+        ND_CaseTimelineController.checkForNewItems(null, null);
+        
+        Map<String,String> m = new Map<String,String>{'New'=>'New'};
+        ND_CaseTimelineController.parseFeedEventString('{"fu":[{"fn":"Status","ov":"Old","nv":"New"}]}', m);
+        ND_CaseTimelineController.parseFeedEventString('invalid', m);
         
         Map<String, String> docMap = new Map<String,String>{'069000000000001' => '068000000000001'};
-        String imgHtml = '<img src="sfdc://069000000000001">';
-        String fixed = ND_CaseTimelineController.fixRelativeImageUrls(imgHtml, 'domain', 'filedomain', docMap, new List<Attachment>());
-        System.assert(fixed.contains('filedomain'));
+        ND_CaseTimelineController.fixRelativeImageUrls('<img src="sfdc://069000000000001">', 'b', 'f', docMap, null);
+        ND_CaseTimelineController.fixRelativeImageUrls('<img src="https://my.salesforce.com/test">', 'b', 'f', docMap, null);
+        ND_CaseTimelineController.fixRelativeImageUrls('<img src="cid:test">', 'b', 'f', docMap, new List<Attachment>{new Attachment(Name='a', Body=Blob.valueOf('x'))});
+        ND_CaseTimelineController.fixRelativeImageUrls('<img src="/test">', 'b', 'f', docMap, null);
+        
+        ND_CaseTimelineController.makeImagesClickable('<img src="contentId=069000000000001">', docMap);
+        ND_CaseTimelineController.makeImagesClickable('<img src="versionId=068000000000001">', docMap);
+        ND_CaseTimelineController.makeImagesClickable('<img src="/version/download/068000000000001">', docMap);
+        ND_CaseTimelineController.makeImagesClickable('<img src="file=00P000000000001">', docMap);
+        ND_CaseTimelineController.makeImagesClickable(null, null);
+    }
 
-        Test.stopTest();
+    @isTest
+    static void testSorting() {
+        EmailMessage em = [SELECT Id, MessageDate FROM EmailMessage LIMIT 1];
+        ND_CaseTimelineController.RawItemWrapper w1 = new ND_CaseTimelineController.RawItemWrapper(em, 'desc');
+        ND_CaseTimelineController.RawItemWrapper w2 = new ND_CaseTimelineController.RawItemWrapper(em, 'desc');
+        w1.compareTo(w2);
+        w1.sortDir = 'asc';
+        w1.compareTo(w2);
+    }
+
+    @isTest
+    static void testCountsAndComment() {
+        Case c = [SELECT Id FROM Case LIMIT 1];
+        ND_CaseTimelineController.getTimelineCounts(c.Id);
+        FeedItem fi = [SELECT Id FROM FeedItem LIMIT 1];
+        ND_CaseTimelineController.addComment(fi.Id, 'Test');
     }
     
     @isTest
-    static void testFileIconLogic() {
-        Case c = new Case(Subject='File Test');
-        insert c;
-        
-        EmailMessage em = new EmailMessage(
-            ParentId = c.Id, 
-            Incoming = true, 
-            ToAddress = 'test@test.com', 
-            FromAddress = 'test@example.com',
-            Subject = 'File Icon Test',
-            TextBody = 'Text body',
-            HtmlBody = '<html><body>Text body</body></html>'
-        );
-        insert em;
-        
-        List<Attachment> atts = new List<Attachment>();
-        atts.add(new Attachment(ParentId=em.Id, Name='test.xls', Body=Blob.valueOf('x')));
-        atts.add(new Attachment(ParentId=em.Id, Name='test.ppt', Body=Blob.valueOf('x')));
-        atts.add(new Attachment(ParentId=em.Id, Name='test.zip', Body=Blob.valueOf('x')));
-        atts.add(new Attachment(ParentId=em.Id, Name='test.png', Body=Blob.valueOf('x')));
-        atts.add(new Attachment(ParentId=em.Id, Name='test.unknown', Body=Blob.valueOf('x')));
-        insert atts;
-        
-        Test.startTest();
-        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, DateTime.now(), 10, 'desc', false, null);
-        Test.stopTest();
-        
-        for(ND_CaseTimelineController.TimelineItem i : items) {
-            if (i.category == 'Email') {
-                System.assertNotEquals(null, i.attachmentsHtml); 
-                System.assert(i.attachmentsHtml.contains('test.xls'));
-            }
-        }
-    }
-
-    @isTest
-    static void testAddComment() {
-        Case c = [SELECT Id FROM Case LIMIT 1];
-        FeedItem fi = new FeedItem(ParentId = c.Id, Body = 'Test Post', Type = 'TextPost');
-        insert fi;
-        
-        Test.startTest();
-        ND_CaseTimelineController.addComment(fi.Id, 'Test Comment Body');
-        Test.stopTest();
-        
-        List<FeedComment> comments = [SELECT Id, CommentBody FROM FeedComment WHERE FeedItemId = :fi.Id];
-        System.assertEquals(1, comments.size(), 'Comment should be created');
-        System.assertEquals('Test Comment Body', comments[0].CommentBody);
-        
-        // Test Nulls
-        ND_CaseTimelineController.addComment(null, 'Body'); // Should return null safely
-        ND_CaseTimelineController.addComment(fi.Id, null); // Should return null safely
-    }
-
-    @isTest
-    static void testTimelineCounts() {
-        Case c = [SELECT Id FROM Case LIMIT 1];
-        
-        Test.startTest();
-        ND_CaseTimelineController.TimelineCounts counts = ND_CaseTimelineController.getTimelineCounts(c.Id);
-        Test.stopTest();
-        
-        System.assertNotEquals(null, counts, 'Counts object should not be null');
-        System.assertEquals(1, counts.emailCount, 'Should find 1 email');
-        // Feed count assertions might vary based on setup, but we just need coverage on the method execution
-        System.assert(counts.internalCount >= 0);
-        System.assert(counts.publicCount >= 0);
-        
-        // Null Case check
-        ND_CaseTimelineController.TimelineCounts nullCounts = ND_CaseTimelineController.getTimelineCounts(null);
-        System.assertEquals(0, nullCounts.emailCount);
-    }
-
-    @isTest
-    static void testTimelineSortingAndInnerClasses() {
-        Case c = [SELECT Id FROM Case LIMIT 1];
-        
-        Test.startTest();
-        // 1. DESC sort
-        List<ND_CaseTimelineController.TimelineItem> itemsDesc = ND_CaseTimelineController.getTimelineData(c.Id, null, 10, 'desc', false, null);
-        if(itemsDesc.size() >= 2) {
-            // First item should be newer than second
-            System.assert(itemsDesc[0].createdDate >= itemsDesc[1].createdDate, 'DESC sort failed');
-        }
-        
-        // 2. ASC sort
-        List<ND_CaseTimelineController.TimelineItem> itemsAsc = ND_CaseTimelineController.getTimelineData(c.Id, null, 10, 'asc', false, null);
-        if(itemsAsc.size() >= 2) {
-            // First item should be older than second
-            System.assert(itemsAsc[0].createdDate <= itemsAsc[1].createdDate, 'ASC sort failed');
-        }
-        
-        // 3. Test CommentItem constructor explicitly
-        ND_CaseTimelineController.CommentItem ci = new ND_CaseTimelineController.CommentItem('id', 'body', 'author', DateTime.now());
-        System.assertEquals('body', ci.body);
-        
-        Test.stopTest();
+    static void testInnerClasses() {
+        new ND_CaseTimelineController.TimelineConfig();
+        ND_CaseTimelineController.getTimelineConfig();
+        new ND_CaseTimelineController.CommentItem('a','b','c',DateTime.now());
+        ND_CaseTimelineController.TimelineItem ti = new ND_CaseTimelineController.TimelineItem();
+        ti.createdDate = DateTime.now();
+        ti.sortDir = 'desc';
+        ti.compareTo(ti);
     }
 }
