@@ -59,6 +59,12 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         return this.isFilesInitialized && (this.hasMoreFiles || (this.allFiles && this.allFiles.length > 50));
     }
 
+    get fileSearchPlaceholder() {
+        const count = this.allFiles ? this.allFiles.length : 0;
+        const suffix = this.hasMoreFiles ? '+' : '';
+        return `Search ${count}${suffix} files by filename or filetype (e.g. .png, myFile)...`;
+    }
+
     lastRefreshDate; 
     _pollingTimer;
     _recordId;
@@ -224,13 +230,18 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         this.lastRefreshDate = new Date().toISOString();
         const startTime = performance.now();
         this.fetchData(null, startTime).then(() => {
-            this.isLoading = false;
+            // Only hide main spinner if we aren't waiting for files or if files are already done
+            if (!this.showFiles || !this.isFilesLoading) {
+                this.isLoading = false;
+            }
             if (this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
             setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
         });
 
         if (this.showFiles) {
-            this.fetchFiles(true);
+            this.fetchFiles(true).then(() => {
+                this.isLoading = false; // Ensure main spinner hidden when files finish
+            });
         }
     }
 
@@ -1010,7 +1021,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
         if (isInitial) {
             this.fileOffset = 0;
             this.allFiles = [];
-            this.hasMoreFiles = true;
+            // Do not reset hasMoreFiles to true here to prevent button flicker
             this.isFilesLoading = true;
         } else {
             this.isFilesLoadingMore = true;
@@ -1049,6 +1060,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.isFilesInitialized = true; // Bug 1: Initialization done
             this.isFilesLoading = false;
             this.isFilesLoadingMore = false;
+            this.isLoading = false; 
             
             // Restore focus after refresh (Ensure search box stays focused while typing)
             // eslint-disable-next-line @lwc/lwc/no-async-operation
