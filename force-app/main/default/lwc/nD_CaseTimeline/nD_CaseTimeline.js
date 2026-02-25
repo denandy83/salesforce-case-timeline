@@ -7,6 +7,7 @@ import getTimelineConfig from '@salesforce/apex/ND_CaseTimelineController.getTim
 import getTimelineCounts from '@salesforce/apex/ND_CaseTimelineController.getTimelineCounts';
 import addComment from '@salesforce/apex/ND_CaseTimelineController.addComment';
 import getEmailHistory from '@salesforce/apex/ND_CaseTimelineController.getEmailHistory';
+import getFiles from '@salesforce/apex/ND_CaseTimelineController.getFiles';
 
 export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track allItems = [];
@@ -37,6 +38,25 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track useToastForUpdates = false;
     @track previewLines = 1;
 
+    // Files state
+    @track showFiles = false;
+    @track allFiles = [];
+    @track fileSearchKey = '';
+    @track draftFileSearchKey = '';
+    @track fileSortBy = 'createdDate';
+    @track fileSortDirection = 'desc';
+    @track showUniqueFiles = true;
+    @track isFilesLoading = false;
+    @track isFilesLoadingMore = false;
+    @track hasMoreFiles = true;
+    fileLimit = 50;
+    fileOffset = 0;
+    _searchTimer;
+
+    get isManualSearch() {
+        return this.allFiles && this.allFiles.length > 50;
+    }
+
     lastRefreshDate; 
     _pollingTimer;
     _recordId;
@@ -51,6 +71,25 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     expandByDefault = false;
 
     _observer; // Infinite scroll observer
+
+    fileColumns = [
+        { 
+            label: 'Filename', 
+            fieldName: 'fullName', 
+            sortable: true,
+            type: 'button',
+            typeAttributes: {
+                label: { fieldName: 'fullName' },
+                name: 'open_file',
+                variant: 'base',
+                class: 'slds-text-link'
+            }
+        },
+        { label: 'Creation Date', fieldName: 'createdDate', type: 'date', sortable: true, typeAttributes: { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' } },
+        { label: 'Filetype', fieldName: 'fileType', sortable: true },
+        { label: 'Size', fieldName: 'formattedSize', sortable: true, cellAttributes: { alignment: 'left' } },
+        { label: 'Owner', fieldName: 'ownerName', sortable: true }
+    ];
 
 
     @api 
@@ -169,25 +208,29 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     }
 
     // --- DATA LOADING ---
-    initialLoad() {
-        if(this.debugMode) console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
-        if (!this.recordId || !this.configLoaded) return;
-        this.stopPolling();
-        this.isLoading = true;
-        this.allItems = []; 
-        if(this.debugMode) console.log('Cleared allItems, sortDirection:', this.sortDirection);
-        this.hasMoreItems = true;
-        this.error = undefined;
-        this.isNewDataAvailable = false;
-        this.lastRefreshDate = new Date().toISOString();
-        const startTime = performance.now();
-        this.fetchData(null,startTime).then(() => {
-            this.isLoading = false;
-            if(this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
-            setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
-        });
-    }
-    handleRefresh(event) {
+            initialLoad() {
+                if(this.debugMode) console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
+                if (!this.recordId || !this.configLoaded) return;
+                this.stopPolling();
+                this.isLoading = true;
+                this.allItems = [];
+                this.allFiles = []; // Reset files cache
+                if(this.debugMode) console.log('Cleared allItems, sortDirection:', this.sortDirection);
+                this.hasMoreItems = true;
+                this.error = undefined;
+                this.isNewDataAvailable = false;
+                this.lastRefreshDate = new Date().toISOString();
+                        const startTime = performance.now();
+                        this.fetchData(null,startTime).then(() => {
+                            this.isLoading = false;
+                            if(this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
+                            setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
+                        });
+                
+                        if (this.showFiles) {
+                            this.fetchFiles(true);
+                        }
+                    }    handleRefresh(event) {
         // Prevent default behavior if called from an anchor tag
         if (event) event.preventDefault();
         
@@ -950,6 +993,125 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     get publicLabel() { return `Public (${this.totalPublicCount})`; }
     get internalLabel() { return `Internal (${this.totalInternalCount})`; }
     get systemLabel() { return `System (${this.totalSystemCount})`; }
+
+    get filesButtonLabel() {
+        return this.showFiles ? 'Show Timeline' : 'List files';
+    }
+
+    get filesButtonVariant() {
+        return this.showFiles ? 'brand' : 'neutral';
+    }
+
+    fetchFiles(isInitial = false) {
+        if (isInitial) {
+            this.fileOffset = 0;
+            this.allFiles = [];
+            this.hasMoreFiles = true;
+            this.isFilesLoading = true;
+        } else {
+            this.isFilesLoadingMore = true;
+        }
+
+        const sortByField = this.fileSortBy === 'formattedSize' ? 'size' : this.fileSortBy;
+
+        return getFiles({ 
+            caseId: this.recordId, 
+            limitCount: this.fileLimit, 
+            offset: this.fileOffset,
+            searchTerm: this.fileSearchKey,
+            sortBy: sortByField,
+            sortDir: this.fileSortDirection,
+            hideDuplicates: this.showUniqueFiles
+        })
+        .then(data => {
+            const formattedData = data.map(f => ({
+                ...f,
+                formattedSize: this.formatSize(f.size)
+            }));
+
+            this.allFiles = [...this.allFiles, ...formattedData];
+            this.hasMoreFiles = data.length === this.fileLimit;
+            this.isFilesLoading = false;
+            this.isFilesLoadingMore = false;
+            
+            // Restore focus after refresh
+            // eslint-disable-next-line @lwc/lwc/no-async-operation
+            setTimeout(() => {
+                const input = this.template.querySelector('[data-id="file-search-input"]');
+                if (input) input.focus();
+            }, 0);
+        })
+        .catch(error => {
+            console.error('Error fetching files:', error);
+            this.isFilesLoading = false;
+            this.isFilesLoadingMore = false;
+        });
+    }
+
+    handleFilesToggle() {
+        this.showFiles = !this.showFiles;
+        if (this.showFiles && this.allFiles.length === 0) {
+            this.fetchFiles(true);
+        }
+    }
+
+    handleFileSearchChange(event) {
+        this.draftFileSearchKey = event.target.value;
+        if (!this.isManualSearch) {
+            // eslint-disable-next-line @lwc/lwc/no-async-operation
+            if (this._searchTimer) clearTimeout(this._searchTimer);
+            // eslint-disable-next-line @lwc/lwc/no-async-operation
+            this._searchTimer = setTimeout(() => {
+                this.fileSearchKey = this.draftFileSearchKey;
+                this.fetchFiles(true);
+            }, 1000);
+        }
+    }
+
+    handleFileSearchKeyUp(event) {
+        if (event.keyCode === 13) {
+            this.handleFileSearchClick();
+        }
+    }
+
+    handleFileSearchClick() {
+        if (this._searchTimer) clearTimeout(this._searchTimer);
+        this.fileSearchKey = this.draftFileSearchKey;
+        this.fetchFiles(true);
+    }
+
+    handleUniqueToggle(event) {
+        this.showUniqueFiles = event.target.checked;
+        this.fetchFiles(true);
+    }
+
+    handleFileSort(event) {
+        this.fileSortBy = event.detail.fieldName;
+        this.fileSortDirection = event.detail.sortDirection;
+        this.fetchFiles(true);
+    }
+
+    handleFilesLoadMore(event) {
+        if (!this.hasMoreFiles || this.isFilesLoadingMore) return;
+        this.fileOffset += this.fileLimit;
+        this.fetchFiles(false);
+    }
+
+    handleFileRowAction(event) {
+        const actionName = event.detail.action.name;
+        const row = event.detail.row;
+        if (actionName === 'open_file') {
+            this.handleImagePreviewClick(row.id);
+        }
+    }
+
+    formatSize(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
 
     get filteredData() {
         let result = this.allItems.filter(item => {

@@ -1,5 +1,91 @@
 public without sharing class ND_CaseTimelineController {
 
+    public class FileItem {
+        @AuraEnabled public String id;
+        @AuraEnabled public String title;
+        @AuraEnabled public String fileExtension;
+        @AuraEnabled public String fileType;
+        @AuraEnabled public DateTime createdDate;
+        @AuraEnabled public String ownerName;
+        @AuraEnabled public String fullName;
+        @AuraEnabled public Long size;
+        @AuraEnabled public String checksum;
+    }
+
+    @AuraEnabled(cacheable=true)
+    public static List<FileItem> getFiles(Id caseId, Integer limitCount, Integer offset, String searchTerm, String sortBy, String sortDir, Boolean hideDuplicates) {
+        List<FileItem> results = new List<FileItem>();
+        if (caseId == null) return results;
+
+        // 1. Collect all possible linked IDs
+        Set<Id> linkedEntityIds = new Set<Id>();
+        linkedEntityIds.add(caseId);
+        for (EmailMessage em : [SELECT Id FROM EmailMessage WHERE ParentId = :caseId LIMIT 1000]) linkedEntityIds.add(em.Id);
+        for (FeedItem fi : [SELECT Id FROM FeedItem WHERE ParentId = :caseId AND HasContent = true LIMIT 1000]) linkedEntityIds.add(fi.Id);
+
+        // 2. Get all Document IDs linked to those entities
+        Set<Id> allDocIds = new Set<Id>();
+        for (ContentDocumentLink cdl : [SELECT ContentDocumentId FROM ContentDocumentLink WHERE LinkedEntityId IN :linkedEntityIds LIMIT 2000]) {
+            allDocIds.add(cdl.ContentDocumentId);
+        }
+        if (allDocIds.isEmpty()) return results;
+
+        // 3. Decide which Document IDs to actually query
+        Set<Id> docIdsToQuery = new Set<Id>();
+        if (hideDuplicates) {
+            // Let the database find unique IDs based on MD5 Checksum
+            // We pick one ID per unique checksum
+            for (AggregateResult ar : [SELECT Checksum, MAX(ContentDocumentId) docId 
+                                       FROM ContentVersion 
+                                       WHERE ContentDocumentId IN :allDocIds AND IsLatest = true AND Checksum != null
+                                       GROUP BY Checksum LIMIT 2000]) {
+                docIdsToQuery.add((Id)ar.get('docId'));
+            }
+            // Also include files that might not have a checksum
+            for (ContentVersion cv : [SELECT ContentDocumentId FROM ContentVersion 
+                                      WHERE ContentDocumentId IN :allDocIds AND IsLatest = true AND Checksum = null LIMIT 2000]) {
+                docIdsToQuery.add(cv.ContentDocumentId);
+            }
+        } else {
+            docIdsToQuery = allDocIds;
+        }
+
+        // 4. Query the actual ContentDocument records
+        String query = 'SELECT Id, Title, FileExtension, FileType, CreatedDate, Owner.Name, ContentSize FROM ContentDocument WHERE Id IN :docIdsToQuery';
+        if (String.isNotBlank(searchTerm)) {
+            String searchFilter = '%' + searchTerm + '%';
+            query += ' AND (Title LIKE :searchFilter OR FileType LIKE :searchFilter)';
+        }
+        
+        // Sorting
+        String fSortBy = String.isNotBlank(sortBy) ? sortBy : 'CreatedDate';
+        if (fSortBy == 'ownerName') fSortBy = 'Owner.Name';
+        else if (fSortBy == 'fullName') fSortBy = 'Title';
+        else if (fSortBy == 'size') fSortBy = 'ContentSize';
+        
+        String fSortDir = String.isNotBlank(sortDir) ? sortDir : 'DESC';
+        query += ' ORDER BY ' + fSortBy + ' ' + fSortDir + ' NULLS LAST';
+        
+        // Pagination
+        query += ' LIMIT ' + (limitCount != null ? limitCount : 50);
+        query += ' OFFSET ' + (offset != null ? offset : 0);
+        
+        for (ContentDocument cd : Database.query(query)) {
+            FileItem fi = new FileItem();
+            fi.id = cd.Id;
+            fi.title = cd.Title;
+            fi.fileExtension = cd.FileExtension;
+            fi.fileType = cd.FileType;
+            fi.createdDate = cd.CreatedDate;
+            fi.ownerName = cd.Owner.Name;
+            fi.size = cd.ContentSize;
+            fi.fullName = cd.Title + (String.isNotBlank(cd.FileExtension) ? '.' + cd.FileExtension : '');
+            results.add(fi);
+        }
+
+        return results;
+    }
+
     public class TimelineItem implements Comparable {
         @AuraEnabled public String id;
         @AuraEnabled public DateTime createdDate;

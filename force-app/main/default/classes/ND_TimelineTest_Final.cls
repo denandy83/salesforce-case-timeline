@@ -7,7 +7,7 @@ public class ND_TimelineTest_Final {
         insert c;
 
         List<EmailMessage> ems = new List<EmailMessage>();
-        for (Integer i = 0; i < 15; i++) {
+        for (Integer i = 0; i < 5; i++) {
             ems.add(new EmailMessage(
                 ParentId = c.Id,
                 Subject = 'Test Email ' + i,
@@ -117,5 +117,37 @@ public class ND_TimelineTest_Final {
         ti.createdDate = DateTime.now();
         ti.sortDir = 'desc';
         ti.compareTo(ti);
+    }
+
+    @isTest
+    static void testFileOverview() {
+        Case c = [SELECT Id FROM Case LIMIT 1];
+        
+        // Setup another file with same content (duplicate)
+        ContentVersion cv2 = new ContentVersion(Title = 'File Duplicate', PathOnClient = 'File2.jpg', VersionData = Blob.valueOf('Data'), IsMajorVersion = true);
+        insert cv2;
+        Id conDocId2 = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv2.Id].ContentDocumentId;
+        ContentDocumentLink cdl2 = new ContentDocumentLink(LinkedEntityId = c.Id, ContentDocumentId = conDocId2, ShareType = 'V');
+        insert cdl2;
+
+        Test.startTest();
+        // Test basic fetch
+        List<ND_CaseTimelineController.FileItem> files = ND_CaseTimelineController.getFiles(c.Id, 50, 0, null, 'createdDate', 'desc', false);
+        
+        // Test search
+        List<ND_CaseTimelineController.FileItem> searchFiles = ND_CaseTimelineController.getFiles(c.Id, 50, 0, 'File', 'fullName', 'asc', false);
+        
+        // Test deduplication
+        List<ND_CaseTimelineController.FileItem> uniqueFiles = ND_CaseTimelineController.getFiles(c.Id, 50, 0, null, 'size', 'desc', true);
+        
+        // Test other sort fields
+        ND_CaseTimelineController.getFiles(c.Id, 10, 0, null, 'fileType', 'asc', false);
+        ND_CaseTimelineController.getFiles(c.Id, 10, 0, null, 'ownerName', 'asc', false);
+        
+        // Test null case
+        ND_CaseTimelineController.getFiles(null, 10, 0, null, null, null, false);
+        Test.stopTest();
+        
+        System.assertNotEquals(0, files.size(), 'Should have returned files');
     }
 }

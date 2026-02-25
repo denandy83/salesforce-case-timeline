@@ -26,6 +26,11 @@
                   onchange={handleToggle}>
                   </lightning-input>
                 </span>
+                <span class="slds-m-left_medium">
+                  <lightning-button label={filesButtonLabel} icon-name="utility:file"
+                  variant={filesButtonVariant} onclick={handleFilesToggle}>
+                  </lightning-button>
+                </span>
               </div>
             </div>
           </div>
@@ -72,8 +77,44 @@
         </div>
       </template>
       <template if:false={isLoading}>
-        <template if:true={filteredData}>
-          <template for:each={filteredData} for:item="item">
+        <template if:true={showFiles}>
+          <div class="slds-p-top_small" style="position: relative; min-height: 200px;">
+            <template if:true={isFilesLoading}>
+                <lightning-spinner alternative-text="Loading files..." size="small"></lightning-spinner>
+            </template>
+            <div class="slds-grid slds-grid_vertical-align-end slds-m-bottom_small">
+              <div class="slds-col slds-grow">
+                <lightning-input type="search" label="Search Files" variant="label-hidden"
+                placeholder="Search by filename or filetype (e.g. .png, myFile)..." value={draftFileSearchKey}
+                onchange={handleFileSearchChange} onkeyup={handleFileSearchKeyUp} data-id="file-search-input">
+                </lightning-input>
+              </div>
+              <template if:true={isManualSearch}>
+                <div class="slds-col slds-no-flex slds-m-left_small">
+                  <lightning-button label="Search" variant="brand" onclick={handleFileSearchClick}>
+                  </lightning-button>
+                </div>
+              </template>
+              <div class="slds-col slds-no-flex slds-m-left_medium">
+                <lightning-input type="toggle" label="Hide duplicate files" name="uniqueFiles"
+                checked={showUniqueFiles} onchange={handleUniqueToggle} message-toggle-active=""
+                message-toggle-inactive="">
+                </lightning-input>
+              </div>
+            </div>
+            <div style="height: 640px;"> <!-- Fixed height for approx 20 records -->
+              <lightning-datatable key-field="id" data={allFiles} columns={fileColumns}
+              onsort={handleFileSort} sorted-by={fileSortBy} sorted-direction={fileSortDirection}
+              onrowaction={handleFileRowAction} hide-checkbox-column
+              enable-infinite-loading={hasMoreFiles} onloadmore={handleFilesLoadMore}
+              is-loading={isFilesLoadingMore}>
+              </lightning-datatable>
+            </div>
+          </div>
+        </template>
+        <template if:false={showFiles}>
+          <template if:true={filteredData}>
+            <template for:each={filteredData} for:item="item">
             <div key={item.id}>
               <div class={item.boxClass} style={item.rowStyle}>
                 <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-p-bottom_xx-small cursor-pointer"
@@ -332,7 +373,9 @@
                                                                           </div>
                                                                         </template>
                                                                       </template>
-            </div>
+                </div>
+              </div>
+            </template>
           </template>
         </template>
         <!-- Sentinel element for Infinite Scrolling -->
