@@ -48,13 +48,15 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     @track showUniqueFiles = true;
     @track isFilesLoading = false;
     @track isFilesLoadingMore = false;
-    @track hasMoreFiles = true;
+    @track hasMoreFiles = false; // Bug 1: Init to false to prevent button pop-in
+    @track isFilesInitialized = false; // Bug 1: Track if we have finished first load
     fileLimit = 50;
     fileOffset = 0;
     _searchTimer;
 
     get isManualSearch() {
-        return this.allFiles && this.allFiles.length > 50;
+        // Bug 1: Only show search button after initialization
+        return this.isFilesInitialized && (this.hasMoreFiles || (this.allFiles && this.allFiles.length > 50));
     }
 
     lastRefreshDate; 
@@ -208,29 +210,31 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
     }
 
     // --- DATA LOADING ---
-            initialLoad() {
-                if(this.debugMode) console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
-                if (!this.recordId || !this.configLoaded) return;
-                this.stopPolling();
-                this.isLoading = true;
-                this.allItems = [];
-                this.allFiles = []; // Reset files cache
-                if(this.debugMode) console.log('Cleared allItems, sortDirection:', this.sortDirection);
-                this.hasMoreItems = true;
-                this.error = undefined;
-                this.isNewDataAvailable = false;
-                this.lastRefreshDate = new Date().toISOString();
-                        const startTime = performance.now();
-                        this.fetchData(null,startTime).then(() => {
-                            this.isLoading = false;
-                            if(this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
-                            setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
-                        });
-                
-                        if (this.showFiles) {
-                            this.fetchFiles(true);
-                        }
-                    }    handleRefresh(event) {
+    initialLoad() {
+        if (this.debugMode) console.log('initialLoad called - recordId:', this.recordId, 'configLoaded:', this.configLoaded);
+        if (!this.recordId || !this.configLoaded) return;
+        this.stopPolling();
+        this.isLoading = true;
+        this.allItems = [];
+        this.allFiles = []; // Reset files cache
+        if (this.debugMode) console.log('Cleared allItems, sortDirection:', this.sortDirection);
+        this.hasMoreItems = true;
+        this.error = undefined;
+        this.isNewDataAvailable = false;
+        this.lastRefreshDate = new Date().toISOString();
+        const startTime = performance.now();
+        this.fetchData(null, startTime).then(() => {
+            this.isLoading = false;
+            if (this.debugMode) console.log('Initial load complete, allItems count:', this.allItems.length);
+            setTimeout(() => { this.renderedCallback(); this.startPolling(); }, 0);
+        });
+
+        if (this.showFiles) {
+            this.fetchFiles(true);
+        }
+    }
+
+    handleRefresh(event) {
         // Prevent default behavior if called from an anchor tag
         if (event) event.preventDefault();
         
@@ -1024,17 +1028,29 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             hideDuplicates: this.showUniqueFiles
         })
         .then(data => {
+            // Bug 2 Fix: Detect next page using extra record
+            if (data.length > this.fileLimit) {
+                this.hasMoreFiles = true;
+                data.pop(); // Remove the +1 record
+            } else {
+                this.hasMoreFiles = false;
+            }
+
             const formattedData = data.map(f => ({
                 ...f,
                 formattedSize: this.formatSize(f.size)
             }));
 
-            this.allFiles = [...this.allFiles, ...formattedData];
-            this.hasMoreFiles = data.length === this.fileLimit;
+            // Bug 1 Fix: Use a Map to ensure unique IDs in the local list
+            const currentFilesMap = new Map(this.allFiles.map(f => [f.id, f]));
+            formattedData.forEach(f => currentFilesMap.set(f.id, f));
+            this.allFiles = Array.from(currentFilesMap.values());
+
+            this.isFilesInitialized = true; // Bug 1: Initialization done
             this.isFilesLoading = false;
             this.isFilesLoadingMore = false;
             
-            // Restore focus after refresh
+            // Restore focus after refresh (Ensure search box stays focused while typing)
             // eslint-disable-next-line @lwc/lwc/no-async-operation
             setTimeout(() => {
                 const input = this.template.querySelector('[data-id="file-search-input"]');

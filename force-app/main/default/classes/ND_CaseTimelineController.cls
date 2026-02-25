@@ -66,8 +66,9 @@ public without sharing class ND_CaseTimelineController {
         String fSortDir = String.isNotBlank(sortDir) ? sortDir : 'DESC';
         query += ' ORDER BY ' + fSortBy + ' ' + fSortDir + ' NULLS LAST';
         
-        // Pagination
-        query += ' LIMIT ' + (limitCount != null ? limitCount : 50);
+        // Pagination (Bug 2: Query +1 to detect next page)
+        Integer queryLimit = (limitCount != null ? limitCount : 50) + 1;
+        query += ' LIMIT ' + queryLimit;
         query += ' OFFSET ' + (offset != null ? offset : 0);
         
         for (ContentDocument cd : Database.query(query)) {
