@@ -12,7 +12,7 @@ public without sharing class ND_CaseTimelineController {
         @AuraEnabled public String checksum;
     }
 
-    @AuraEnabled(cacheable=true)
+    @AuraEnabled
     public static List<FileItem> getFiles(Id caseId, Integer limitCount, Integer offset, String searchTerm, String sortBy, String sortDir, Boolean hideDuplicates) {
         List<FileItem> results = new List<FileItem>();
         if (caseId == null) return results;
@@ -921,7 +921,7 @@ public without sharing class ND_CaseTimelineController {
             objectName = 'Attachment';
         }
 
-        return '<a href="/lightning/r/' + objectName + '/' + docId + '/view" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-flex; align-items:center; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' + 
+        return '<a href="/lightning/r/' + objectName + '/' + docId + '/view" target="_blank" class="image-preview-link" data-doc-id="' + docId + '" style="display:inline-flex; align-items:center; margin:4px 8px 4px 0; padding:6px 10px; background:#f3f2f2; border:1px solid #c9c7c5; border-radius:3px; text-decoration:none; color:#0176d3; font-size:0.8125rem; cursor:pointer;">' + 
             '<span style="margin-right:6px; font-size:1.1em;">' + fileIcon + '</span>' + fileName + 
             '</a>';
     }

@@ -85,7 +85,7 @@
             <div class="slds-grid slds-grid_vertical-align-end slds-m-bottom_small">
               <div class="slds-col slds-grow">
                 <lightning-input type="search" label="Search Files" variant="label-hidden"
-                placeholder="Search by filename or filetype (e.g. .png, myFile)..." value={draftFileSearchKey}
+                placeholder={fileSearchPlaceholder} value={draftFileSearchKey}
                 onchange={handleFileSearchChange} onkeyup={handleFileSearchKeyUp} data-id="file-search-input">
                 </lightning-input>
               </div>
@@ -230,7 +230,7 @@
                                       background-color: inherit;
                                       border-bottom-left-radius: 0.25rem; border-bottom-right-radius: 0.25rem;">
               
-                              <div data-attachments-collapsed-id={item.id} lwc:dom="manual"></div>
+                              <div data-attachments-collapsed-id={item.id} lwc:dom="manual" onclick={handleGlobalClick}></div>
                           </div>
                       </template>
                   </template>
@@ -319,7 +319,7 @@
                     </template>
                     
                     <template if:true={item.attachmentsHtml}>
-                      <div class="email-attachments" data-attachments-id={item.id} lwc:dom="manual"></div>
+                      <div class="email-attachments" data-attachments-id={item.id} lwc:dom="manual" onclick={handleGlobalClick}></div>
                     </template>
 
                   </div>
@@ -377,13 +377,15 @@
             </template>
           </template>
         </template>
-        <!-- Sentinel element for Infinite Scrolling -->
-        <div if:true={hasMoreItems} class="infinite-scroll-sentinel" lwc:dom="manual" style="height: 10px;"></div>
-        
-        <template if:true={isLoadingMore}>
-            <div class="slds-p-vertical_small slds-align_absolute-center">
-                <lightning-spinner alternative-text="Loading more..." size="small"></lightning-spinner>
-            </div>
+        <!-- Sentinel element for Infinite Scrolling (Hidden when viewing files) -->
+        <template if:false={showFiles}>
+            <div if:true={hasMoreItems} class="infinite-scroll-sentinel" lwc:dom="manual" style="height: 10px;"></div>
+            
+            <template if:true={isLoadingMore}>
+                <div class="slds-p-vertical_small slds-align_absolute-center">
+                    <lightning-spinner alternative-text="Loading more..." size="small"></lightning-spinner>
+                </div>
+            </template>
         </template>
       </template>
     </div>

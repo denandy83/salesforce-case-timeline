@@ -915,13 +915,19 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
      */
     handleGlobalClick(event) {
         const target = event.target;
+        console.log('CaseTimeline: GlobalClick triggered by', target.tagName, 'Class:', target.className);
         
         // 1. Image Preview Links
         const previewLink = target.closest('.image-preview-link');
         if (previewLink) {
+            console.log('CaseTimeline: Intercepted attachment click. ID:', previewLink.dataset.docId);
             event.preventDefault();
             event.stopPropagation();
-            this.handleImagePreviewClick(previewLink.dataset.docId);
+            if (previewLink.dataset.docId) {
+                this.handleImagePreviewClick(previewLink.dataset.docId);
+            } else {
+                console.warn('CaseTimeline: Clicked preview link but data-doc-id is missing.');
+            }
             return;
         }
 
