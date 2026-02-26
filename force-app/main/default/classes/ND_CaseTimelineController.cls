@@ -871,8 +871,17 @@ public without sharing class ND_CaseTimelineController {
                         if (segment instanceof ConnectApi.MentionSegment) {
                             ConnectApi.MentionSegment m = (ConnectApi.MentionSegment)segment;
                             String mentionLink = '<a href="/' + m.record.id + '" class="mention-link" data-record-id="' + m.record.id + '" style="color:#0176d3; font-weight:bold; text-decoration:none;">' + m.text + '</a>';
-                            String placeholder = '[[[[MENTION_' + mentionIndex + ']]]]';
+                            String placeholder = '[[[[SEGMENT_' + mentionIndex + ']]]]';
                             mentionProtectionMap.put(placeholder, mentionLink); mentionReplacements.put(m.text, placeholder); mentionIndex++;
+                        } else if (segment instanceof ConnectApi.EntityLinkSegment) {
+                            ConnectApi.EntityLinkSegment els = (ConnectApi.EntityLinkSegment)segment;
+                            String resIdStr = els.reference.id;
+                            String entityLink = '<a href="/lightning/r/' + resIdStr + '/view" class="mention-link" data-record-id="' + resIdStr + '" style="color:#0176d3; font-weight:bold; text-decoration:none;">' + els.text + '</a>';
+                            String placeholder = '[[[[SEGMENT_' + mentionIndex + ']]]]';
+                            mentionProtectionMap.put(placeholder, entityLink); 
+                            String textToReplace = els.text;
+                            if (processed.contains('/' + textToReplace)) textToReplace = '/' + textToReplace;
+                            mentionReplacements.put(textToReplace, placeholder); mentionIndex++;
                         }
                     }
                 }
