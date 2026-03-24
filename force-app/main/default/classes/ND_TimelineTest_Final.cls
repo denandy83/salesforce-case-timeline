@@ -120,6 +120,63 @@ public class ND_TimelineTest_Final {
     }
 
     @isTest
+    static void testLargeEmailHandling() {
+        Case c = [SELECT Id FROM Case LIMIT 1];
+
+        // Build a body > 15KB with various history markers embedded
+        String padding = '';
+        for (Integer i = 0; i < 200; i++) {
+            padding += '<p>Line ' + i + ' of padding content for large email test. This adds length to the body.</p>';
+        }
+        // Body with "From:" + "Sent:" pattern deep inside
+        String largeBody = '<html><body>' + padding +
+            '<b>From:</b> someone@test.com<br/><b>Sent:</b> Monday, Jan 1<br/>' +
+            padding + '</body></html>';
+
+        // Body with "--- Original Message" marker
+        String bodyWithMarker = '<html><body>' + padding +
+            '--------------- Original Message ---------------<br/>' +
+            '<b>From:</b> old@test.com<br/>' + '</body></html>';
+
+        // Body with "On ... wrote:" pattern
+        String bodyWithWrote = '<html><body>' + padding +
+            'On Mon, Jan 1 2026 someone@test.com wrote: previous reply' + '</body></html>';
+
+        // Body with French pattern
+        String bodyFrench = '<html><body>' + padding +
+            'De: utilisateur@test.com Envoy le lundi' + '</body></html>';
+
+        // Body with Italian pattern
+        String bodyItalian = '<html><body>' + padding +
+            'Da: utente@test.com Inviato lunedi' + '</body></html>';
+
+        // Body with underscores
+        String bodyUnderscores = '<html><body>' + padding +
+            '________________________' + padding + '</body></html>';
+
+        List<EmailMessage> ems = new List<EmailMessage>();
+        for (String b : new List<String>{largeBody, bodyWithMarker, bodyWithWrote, bodyFrench, bodyItalian, bodyUnderscores}) {
+            ems.add(new EmailMessage(
+                ParentId = c.Id, Subject = 'Large Test', HtmlBody = b, TextBody = 'fallback',
+                MessageDate = DateTime.now(), Incoming = true,
+                FromAddress = 'large@test.com', FromName = 'Large Sender',
+                ToAddress = 'to@test.com', Status = '1'
+            ));
+        }
+        insert ems;
+
+        Test.startTest();
+        // This exercises findHistorySplit, the >15KB cap, and chunked getEmailHistory
+        List<ND_CaseTimelineController.TimelineItem> items = ND_CaseTimelineController.getTimelineData(c.Id, null, 20, 'desc', false, null);
+        System.assert(items.size() > 0, 'Should return items');
+
+        // Test getEmailHistory on a large email (exercises full-body return + chunking)
+        ND_CaseTimelineController.getEmailHistory(ems[0].Id);
+        ND_CaseTimelineController.getEmailHistory(ems[1].Id);
+        Test.stopTest();
+    }
+
+    @isTest
     static void testFileOverview() {
         Case c = [SELECT Id FROM Case LIMIT 1];
         

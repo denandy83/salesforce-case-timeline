@@ -486,15 +486,28 @@ public without sharing class ND_CaseTimelineController {
             EmailMessage em = [SELECT HtmlBody, TextBody FROM EmailMessage WHERE Id = :emailId LIMIT 1];
             String body = String.isNotBlank(em.HtmlBody) ? em.HtmlBody : em.TextBody;
             if (String.isBlank(body)) return null;
-            
-            Matcher m = getHistoryPattern().matcher(body);
-            if (m.find()) {
-                String history = body.substring(m.start());
-                Context ctx = new Context();
-                ctx.baseUrl = getBaseUrl(); ctx.fileBaseUrl = getFileBaseUrl();
-                // We do minimal processing for history to ensure images/links work
-                return fixRelativeImageUrls(history, ctx.baseUrl, ctx.fileBaseUrl, new Map<String, String>(), null); 
+
+            Integer splitPos = findHistorySplit(body);
+            String history;
+            // For long emails (hidden behind "Long email" placeholder), return the full body
+            // For normal emails, return only the history portion after the split
+            if (body.length() > 15000 || splitPos < 0) {
+                history = body;
+            } else {
+                history = body.substring(splitPos);
             }
+            Context ctx = new Context();
+            ctx.baseUrl = getBaseUrl(); ctx.fileBaseUrl = getFileBaseUrl();
+            // Process in safe chunks to avoid regex complexity crashes
+            if (history.length() > 50000) {
+                String processed = '';
+                for (Integer i = 0; i < history.length(); i += 50000) {
+                    String chunk = history.substring(i, Math.min(i + 50000, history.length()));
+                    processed += fixRelativeImageUrls(chunk, ctx.baseUrl, ctx.fileBaseUrl, new Map<String, String>(), null);
+                }
+                return processed;
+            }
+            return fixRelativeImageUrls(history, ctx.baseUrl, ctx.fileBaseUrl, new Map<String, String>(), null);
         } catch (Exception e) { System.debug('Error fetching history: ' + e.getMessage()); }
         return null;
     }
@@ -632,7 +645,7 @@ public without sharing class ND_CaseTimelineController {
             }
         }
         for (EmailMessage em : emails) {
-            if (String.isNotBlank(em.HtmlBody)) {
+            if (String.isNotBlank(em.HtmlBody) && em.HtmlBody.length() <= 15000) {
                 Set<String> bodyIds = getUsedInlineIds(em.HtmlBody);
                 for (String rid : bodyIds) {
                     if (rid.startsWith('069')) contentDocIds.add(rid);
@@ -669,8 +682,7 @@ public without sharing class ND_CaseTimelineController {
 
     private static List<TimelineItem> transformEmails(List<EmailMessage> emails, Context ctx) {
         List<TimelineItem> results = new List<TimelineItem>();
-        Pattern historyPattern = getHistoryPattern();
-        
+
         for (EmailMessage em : emails) {
             TimelineItem item = new TimelineItem();
             item.id = em.Id;
@@ -697,27 +709,35 @@ public without sharing class ND_CaseTimelineController {
             
             String newContent = fullBody;
             if (String.isNotBlank(fullBody)) {
-                Matcher m = historyPattern.matcher(fullBody);
-                if (m.find()) {
-                    newContent = fullBody.substring(0, m.start());
+                Integer splitPos = findHistorySplit(fullBody);
+                if (splitPos >= 0) {
+                    newContent = fullBody.substring(0, splitPos);
                     item.hasHistory = true;
                 }
             }
 
-            try {
-                if (String.isNotBlank(newContent)) {
-                    String processed = fixRelativeImageUrls(newContent, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
-                    item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
-                } else {
-                    item.body = '';
+            // If the body is very large after history stripping, hide it entirely
+            // and let the user load it on-demand via "Show History"
+            if (newContent.length() > 15000) {
+                item.body = '<i style="color:red;">Long email. Click Show History to see.</i>';
+                item.hasHistory = true;
+            } else {
+                try {
+                    if (String.isNotBlank(newContent)) {
+                        String processed = fixRelativeImageUrls(newContent, ctx.baseUrl, ctx.fileBaseUrl, ctx.documentIdToVersionId, availableAtts);
+                        item.body = makeImagesClickable(processed, ctx.versionIdToDocumentId);
+                    } else {
+                        item.body = '';
+                    }
+                } catch (Exception e) {
+                    System.debug('Error processing email body for ' + em.Id + ': ' + e.getMessage());
+                    item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '<i>(Content could not be displayed due to size or format limits)</i>';
                 }
-            } catch (Exception e) {
-                System.debug('Error processing email body for ' + em.Id + ': ' + e.getMessage());
-                item.body = (em.TextBody != null) ? em.TextBody.replace('\n', '<br/>') : '<i>(Content could not be displayed due to size or format limits)</i>';
             }
 
             // Attachments (Definitive Exclusion)
-            Set<String> rawInlineIds = getUsedInlineIds(fullBody);
+            // Skip inline ID scan for large bodies (they'll be hidden behind "Show History" anyway)
+            Set<String> rawInlineIds = (fullBody.length() <= 15000) ? getUsedInlineIds(fullBody) : new Set<String>();
             Set<String> inlineIds = new Set<String>();
             
             // Map every detected ID to BOTH its Version and Document counterparts
@@ -1505,14 +1525,66 @@ styledCode = styledCode.replaceAll(
         return String.join(enrichedParts, ', ');
     }
     
-    private static Pattern getHistoryPattern() {
-        String p1 = 'On\\s+[A-Za-z]{3}.{0,200}?wrote:'; 
-        String p2 = '-{3,}\\s*(?:Original|Forwarded)\\s+Message\\s*-{3,}';
-        String p3 = '(?:From:|<b>From:</b>).{1,300}?(?:Sent:|<b>Sent:</b>)';
-        String p4 = 'From:.{1,100}?(&lt;|<).+?@.+?(&gt;|>)';
-        String p5 = 'De\\s*:.{1,100}?Envoy.{1,100}?:';
-        String p6 = '_{20,}';
-        String p7 = 'Da\\s*:.{1,100}?Inviato\\s*:'; 
-        return Pattern.compile('(?is)(' + p1 + '|' + p2 + '|' + p3 + '|' + p4 + '|' + p5 + '|' + p6 + '|' + p7 + ')');
+    private static Integer findHistorySplit(String body) {
+        if (String.isBlank(body)) return -1;
+        Integer earliest = -1;
+
+        // Pattern 1: "--- Original Message ---" or "--- Forwarded Message ---"
+        for (String marker : new List<String>{'--- Original Message', '--- Forwarded Message', '---Original Message', '---Forwarded Message'}) {
+            Integer idx = body.indexOf(marker);
+            if (idx == -1) idx = body.toLowerCase().indexOf(marker.toLowerCase());
+            if (idx >= 0 && (earliest == -1 || idx < earliest)) earliest = idx;
+        }
+
+        // Pattern 2: "____________________" (20+ underscores)
+        Pattern p6 = Pattern.compile('_{20,}');
+        Matcher m6 = p6.matcher(body);
+        if (m6.find() && (earliest == -1 || m6.start() < earliest)) earliest = m6.start();
+
+        // Pattern 3: "wrote:" preceded by "On " (within 500 chars) - indexOf-based
+        Integer wroteIdx = body.indexOf('wrote:');
+        while (wroteIdx > 0) {
+            String preceding = body.substring(Math.max(0, wroteIdx - 500), wroteIdx);
+            Integer onIdx = preceding.lastIndexOf('On ');
+            if (onIdx == -1) onIdx = preceding.lastIndexOf('on ');
+            if (onIdx >= 0) {
+                Integer splitPos = Math.max(0, wroteIdx - 500) + onIdx;
+                if (earliest == -1 || splitPos < earliest) earliest = splitPos;
+                break;
+            }
+            wroteIdx = body.indexOf('wrote:', wroteIdx + 6);
+        }
+
+        // Pattern 4: "From:" followed by "Sent:" (within 400 chars) - indexOf-based
+        for (String fromMarker : new List<String>{'From:', '<b>From:</b>'}) {
+            Integer fromIdx = body.indexOf(fromMarker);
+            while (fromIdx >= 0) {
+                String after = body.substring(fromIdx, Math.min(fromIdx + 400, body.length()));
+                Boolean hasSent = after.contains('Sent:') || after.contains('<b>Sent:</b>');
+                if (hasSent && (earliest == -1 || fromIdx < earliest)) {
+                    earliest = fromIdx;
+                    break;
+                }
+                fromIdx = body.indexOf(fromMarker, fromIdx + fromMarker.length());
+            }
+        }
+
+        // Pattern 5: "De:" ... "Envoy" (French) - indexOf-based
+        Integer deIdx = body.indexOf('De:');
+        if (deIdx == -1) deIdx = body.indexOf('De :');
+        if (deIdx >= 0) {
+            String after = body.substring(deIdx, Math.min(deIdx + 200, body.length()));
+            if (after.contains('Envoy') && (earliest == -1 || deIdx < earliest)) earliest = deIdx;
+        }
+
+        // Pattern 6: "Da:" ... "Inviato" (Italian) - indexOf-based
+        Integer daIdx = body.indexOf('Da:');
+        if (daIdx == -1) daIdx = body.indexOf('Da :');
+        if (daIdx >= 0) {
+            String after = body.substring(daIdx, Math.min(daIdx + 200, body.length()));
+            if (after.contains('Inviato') && (earliest == -1 || daIdx < earliest)) earliest = daIdx;
+        }
+
+        return earliest;
     }
 }

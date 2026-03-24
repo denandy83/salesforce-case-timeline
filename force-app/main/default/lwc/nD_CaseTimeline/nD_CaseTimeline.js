@@ -318,6 +318,7 @@ export default class Nd_CaseTimeline extends NavigationMixin(LightningElement) {
             this.error = error;
             this.isLoading = false;
             this.isLoadingMore = false;
+            this.hasMoreItems = false;
         });
     }
 
