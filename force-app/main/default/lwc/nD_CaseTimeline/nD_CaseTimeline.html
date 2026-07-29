@@ -1,93 +1,601 @@
-<!-- VERSION: 2024-12-16 16:50 -->
- <template>
-    <lightning-card variant="narrow">
-        <div class="slds-p-horizontal_medium slds-p-bottom_small slds-border_bottom">
-            <div class="slds-grid slds-grid_vertical-align-center slds-wrap">
-                <div class="slds-col slds-grow">
-                    <div class="slds-form-element">
-                        <div class="slds-form-element__control">
-                            <div class="slds-checkbox_button-group">
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Emails" name="email" checked={showEmail} onchange={handleToggle}></lightning-input></span>
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Public" name="public" checked={showPublic} onchange={handleToggle}></lightning-input></span>
-                                <span class="slds-m-right_medium"><lightning-input type="checkbox" label="Internal" name="internal" checked={showInternal} onchange={handleToggle}></lightning-input></span>
-                                <span><lightning-input type="checkbox" label="System" name="system" checked={showSystem} onchange={handleToggle}></lightning-input></span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="slds-col slds-no-flex">
-                    <div class="slds-grid slds-grid_vertical-align-center">
-                        <span class="slds-text-body_small slds-text-color_weak slds-m-right_x-small">{sortLabel}</span>
-                        <lightning-button-icon icon-name={sortIcon} alternative-text="Sort" variant="border-filled" onclick={handleSortToggle}></lightning-button-icon>
-                        <lightning-button-icon icon-name="utility:collapse_all" alternative-text="Collapse All" variant="border-filled" class="slds-m-left_x-small" onclick={handleCollapseAll}></lightning-button-icon>
-                        <lightning-button-icon icon-name="utility:refresh" alternative-text="Refresh Feed" variant="border-filled" class="slds-m-left_x-small" onclick={handleRefresh}></lightning-button-icon>
-                    </div>
-                </div>
+<template>
+  <lightning-card variant="narrow">
+    <div class="slds-p-horizontal_medium slds-p-bottom_small slds-border_bottom">
+      <div class="slds-grid slds-grid_vertical-align-center slds-wrap">
+        <div class="slds-col slds-grow">
+          <div class="slds-form-element">
+            <div class="slds-form-element__control">
+              <div class="slds-checkbox_button-group">
+                <span class="slds-m-right_medium">
+                  <lightning-input type="checkbox" label={emailLabel} name="email" checked={showEmail}
+                  onchange={handleToggle}>
+                  </lightning-input>
+                </span>
+                <span class="slds-m-right_medium">
+                  <lightning-input type="checkbox" label={publicLabel} name="public" checked={showPublic}
+                  onchange={handleToggle}>
+                  </lightning-input>
+                </span>
+                <span class="slds-m-right_medium">
+                  <lightning-input type="checkbox" label={internalLabel} name="internal"
+                  checked={showInternal} onchange={handleToggle}>
+                  </lightning-input>
+                </span>
+                <span>
+                  <lightning-input type="checkbox" label={systemLabel} name="system" checked={showSystem}
+                  onchange={handleToggle}>
+                  </lightning-input>
+                </span>
+                <span class="slds-m-left_medium">
+                  <lightning-button label={filesButtonLabel} icon-name="utility:file"
+                  variant={filesButtonVariant} onclick={handleFilesToggle}>
+                  </lightning-button>
+                </span>
+              </div>
             </div>
+          </div>
         </div>
-        <div class="slds-p-around_medium slds-scrollable_y">
-            <!-- Loading Spinner -->
-            <template if:true={isLoading}>
-                <div class="slds-align_absolute-center" style="min-height: 200px;">
-                    <lightning-spinner alternative-text="Loading timeline..." size="medium"></lightning-spinner>
-                </div>
+        <div class="slds-col slds-no-flex">
+          <div class="slds-grid slds-grid_vertical-align-center">
+            <span class="slds-text-body_small slds-text-color_weak slds-m-right_x-small">
+              {sortLabel}
+            </span>
+            <lightning-button-icon icon-name={sortIcon} alternative-text="Sort" variant="border-filled"
+            onclick={handleSortToggle}>
+            </lightning-button-icon>
+            <lightning-button-icon icon-name={expandCollapseIcon} alternative-text={expandCollapseLabel}
+            variant="border-filled" class="slds-m-left_x-small" onclick={handleExpandCollapseAll}>
+            </lightning-button-icon>
+            <lightning-button-icon icon-name="utility:refresh" alternative-text="Refresh Feed"
+            variant="border-filled" class="slds-m-left_x-small" onclick={handleRefresh}>
+            </lightning-button-icon>
+            <lightning-button-icon icon-name="utility:settings" alternative-text="Settings"
+            variant="border-filled" class="slds-m-left_x-small" onclick={handleSettingsClick}>
+            </lightning-button-icon>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <template if:true={isNewDataAvailable}>
+      <div class="slds-notify slds-notify_alert slds-alert_warning" role="alert"
+      style="border-radius:0;">
+        <lightning-icon icon-name="utility:warning" size="x-small" variant="inverse"
+        class="slds-m-right_x-small">
+        </lightning-icon>
+        <h2>
+          There is new data, please <a href="javascript:void(0);" onclick={handleRefresh} style="color:inherit; text-decoration:underline;">refresh</a>&nbsp;to see it.
+        </h2>
+      </div>
+    </template>
+
+    <div class="slds-p-horizontal_medium slds-p-bottom_medium slds-scrollable_y timeline-container" onclick={handleGlobalClick}>
+      <template if:true={isLoading}>
+        <div class="slds-align_absolute-center" style="min-height: 200px;">
+          <lightning-spinner alternative-text="Loading..." size="medium">
+          </lightning-spinner>
+        </div>
+      </template>
+      <template if:false={isLoading}>
+        <template if:true={showFiles}>
+          <div class="slds-p-top_small" style="position: relative; min-height: 200px;">
+            <template if:true={isFilesLoading}>
+                <lightning-spinner alternative-text="Loading files..." size="small"></lightning-spinner>
             </template>
-            
-            <!-- Error Message -->
-            <template if:true={error}>
-                <div class="slds-text-color_error slds-text-align_center slds-p-around_medium">
-                    <p>Error loading timeline data</p>
-                    <p class="slds-text-body_small">{error.body.message}</p>
+            <div class="slds-grid slds-grid_vertical-align-end slds-m-bottom_small">
+              <div class="slds-col slds-grow">
+                <lightning-input type="search" label="Search Files" variant="label-hidden"
+                placeholder={fileSearchPlaceholder} value={draftFileSearchKey}
+                onchange={handleFileSearchChange} onkeyup={handleFileSearchKeyUp} data-id="file-search-input">
+                </lightning-input>
+              </div>
+              <template if:true={isManualSearch}>
+                <div class="slds-col slds-no-flex slds-m-left_small">
+                  <lightning-button label="Search" variant="brand" onclick={handleFileSearchClick}>
+                  </lightning-button>
                 </div>
-            </template>
-            
-            <!-- Timeline Items -->
-            <template if:false={isLoading}>
-                <template if:true={filteredData}>
-                    <template for:each={filteredData} for:item="item">
-                    
-                    <div key={item.id} class={item.boxClass} style={item.rowStyle}>
-                        
-                        <div class="slds-grid slds-grid_align-spread slds-m-bottom_xx-small">
-                            <div class="slds-truncate slds-text-heading_small title-link-container" title={item.title}>
-                                <a href="javascript:void(0);" onclick={handleTitleClick} data-record-id={item.id} class="title-link">
-                                    <strong>{item.title}</strong>
-                                </a>
-                            </div>
-                            <div class="slds-text-color_weak slds-text-body_small"><lightning-formatted-date-time value={item.createdDate} year="numeric" month="short" day="2-digit" hour="2-digit" minute="2-digit"></lightning-formatted-date-time></div>
-                        </div>
-                        <div class="slds-text-body_small slds-m-bottom_small">
-                            <span class={item.emailBadgeClass} if:true={item.isEmailCategory}>Email</span>
-                            <span class="slds-badge" if:true={item.isPublicCategory}>Public</span>
-                            <span class="slds-badge slds-theme_warning" if:true={item.isInternalCategory}>Internal</span>
-                            <span class="slds-badge slds-theme_inverse" if:true={item.isSystemCategory}>System</span>
-                            <span class="slds-m-left_small">From: <b>{item.author}</b></span>
-                        </div>
-                        
-                        <!-- Changed to manual DOM rendering for images to work -->
-                        <div class="email-body-main" data-body-id={item.id} lwc:dom="manual"></div>
-                        
-                        <template if:true={item.hasHistory}>
-                            <div class="slds-m-top_small slds-text-align_left">
-                                <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id} class="slds-text-link_reset slds-text-color_brand">
-                                    <template if:false={item.historyExpanded}><b>Show More...</b></template>
-                                    <template if:true={item.historyExpanded}><b>Show Less</b></template>
-                                </a>
-                            </div>
-                            <template if:true={item.historyExpanded}>
-                                <!-- Changed to manual DOM rendering for images to work -->
-                                <div class="slds-m-top_x-small slds-p-around_small slds-theme_shade email-history-content" data-history-id={item.id} lwc:dom="manual"></div>
-                            </template>
-                        </template>
+              </template>
+              <div class="slds-col slds-no-flex slds-m-left_medium">
+                <lightning-input type="toggle" label="Hide duplicate files" name="uniqueFiles"
+                checked={showUniqueFiles} onchange={handleUniqueToggle} message-toggle-active=""
+                message-toggle-inactive="">
+                </lightning-input>
+              </div>
+            </div>
+            <div style="height: 640px;"> <!-- Fixed height for approx 20 records -->
+              <lightning-datatable key-field="id" data={allFiles} columns={fileColumns}
+              onsort={handleFileSort} sorted-by={fileSortBy} sorted-direction={fileSortDirection}
+              onrowaction={handleFileRowAction} hide-checkbox-column
+              enable-infinite-loading={hasMoreFiles} onloadmore={handleFilesLoadMore}
+              is-loading={isFilesLoadingMore}>
+              </lightning-datatable>
+            </div>
+          </div>
+        </template>
+        <template if:false={showFiles}>
+          <template if:true={filteredData}>
+            <template for:each={filteredData} for:item="item">
+            <div key={item.id}>
+              <div class={item.boxClass} style={item.rowStyle}>
+                <div class="slds-grid slds-grid_align-spread slds-grid_vertical-align-center slds-p-bottom_xx-small cursor-pointer"
+                onclick={handleTitleClick} data-record-id={item.id}>
+                  <div class="slds-grid slds-grid_vertical-align-center slds-truncate">
+                    <lightning-icon icon-name={item.expandIcon} size="x-small" class="slds-m-right_x-small slds-text-color_weak">
+                    </lightning-icon>
+                    <div class="slds-m-right_small slds-shrink-none">
+                      <span class={item.emailBadgeClass} if:true={item.isEmailCategory}>
+                        Email
+                      </span>
+                      <span class="slds-badge" if:true={item.isPublicCategory}>
+                        Public
+                      </span>
+                      <span class="slds-badge slds-theme_warning" if:true={item.isInternalCategory}>
+                        Internal
+                      </span>
+                      <span class="slds-badge slds-theme_inverse" if:true={item.isSystemCategory}>
+                        System
+                      </span>
                     </div>
+                    <div class="slds-truncate slds-text-heading_small">
+                      <strong>
+                        {item.title}
+                      </strong>
+                    </div>
+                  </div>
+                                  <div class="slds-grid slds-grid_vertical-align-center slds-shrink-none">
+                                    <template if:true={item.hasComments}>
+                                      <div class="slds-m-right_small slds-grid slds-grid_vertical-align-center slds-text-color_weak" title={item.commentCount}>
+                                          <lightning-icon icon-name="utility:chat" size="xx-small" class="slds-m-right_xxx-small slds-text-color_weak"></lightning-icon>
+                                          <span class="slds-text-body_small"><b>{item.commentCount}</b></span>
+                                      </div>
+                                    </template>
+                                    <div class="slds-text-color_weak slds-text-body_small slds-m-right_small">
+                                      <lightning-formatted-date-time value={item.createdDate} year="numeric"
+                                      month="short" day="2-digit" hour="2-digit" minute="2-digit">
+                                      </lightning-formatted-date-time>
+                                    </div>                    <template if:true={item.isEmailCategory}>
+                      <div style="position: relative;">
+                        <lightning-button-icon icon-name="utility:info" size="x-small" variant="bare"
+                          onclick={handleEmailInfoToggle} data-id={item.id} alternative-text="Email Info"
+                          class="slds-m-right_xx-small">
+                        </lightning-button-icon>
+                        <template if:true={item.showEmailInfo}>
+                          <section role="dialog" tabindex="-1" class="slds-popover slds-popover_panel slds-nubbin_top-right" 
+                            style="position: absolute; top: 100%; right: 0; margin-top: 0.5rem; min-width: 20rem; z-index: 7000;">
+                            <button class="slds-button slds-button_icon slds-button_icon-small slds-float_right slds-popover__close"
+                              title="Close" onclick={handleEmailInfoClose} data-id={item.id}>
+                              <lightning-icon icon-name="utility:close" alternative-text="Close" size="x-small"></lightning-icon>
+                              <span class="slds-assistive-text">Close</span>
+                            </button>
+                            <div class="slds-popover__body">
+                              <dl class="slds-list_horizontal slds-wrap">
+                                <template if:true={item.emailSubject}>
+                                  <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Subject</dt>
+                                  <dd class="slds-item_detail slds-truncate" style="margin-left: 0.5rem;">{item.emailSubject}</dd>
+                                </template>
+                                <template if:true={item.emailTo}>
+                                  <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">To</dt>
+                                  <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                      data-popover-to={item.id} lwc:dom="manual"></dd>
+                                </template>
+                                <template if:true={item.emailCc}>
+                                  <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Cc</dt>
+                                  <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                      data-popover-cc={item.id} lwc:dom="manual"></dd>
+                                </template>
+                                <template if:true={item.emailBcc}>
+                                  <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">Bcc</dt>
+                                  <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                      data-popover-bcc={item.id} lwc:dom="manual"></dd>
+                                </template>
+                                <template if:true={item.emailFrom}>
+                                  <dt class="slds-item_label slds-text-color_weak slds-truncate" style="width: 4rem;">From</dt>
+                                  <dd class="slds-item_detail" style="margin-left: 0.5rem; word-break: break-word;" 
+                                      data-popover-from={item.id} lwc:dom="manual"></dd>
+                                </template>
+                              </dl>
+                            </div>
+                          </section>
+                        </template>
+                      </div>
+                    </template>
+                    <template if:true={item.isEmailMessage}>
+                      <lightning-button-icon icon-name="utility:reply_all" size="x-small" variant="bare"
+                        onclick={handleReplyAll} data-email-id={item.id} alternative-text="Reply All"
+                        class="slds-m-right_xx-small">
+                      </lightning-button-icon>
+                    </template>
+                    <lightning-button-icon icon-name="utility:new_window" size="x-small" variant="bare"
+                    onclick={handleOpenRecord} data-record-id={item.id} alternative-text="Open Record">
+                    </lightning-button-icon>
+                  </div>
+                </div>
+                <template if:false={item.isExpanded}>
+                  
+                  <template if:true={item.previewText}>
+                      <div class="slds-text-body_small slds-text-color_weak slds-m-left_medium slds-p-left_small slds-border_left"
+                           style={item.previewStyle}
+                           title={item.previewText} 
+                           onclick={handleTitleClick} 
+                           data-record-id={item.id}>
+                      {item.previewText}
+                      </div>
+                  </template>
+                  
+                  <template if:true={showAttachmentsCollapsed}>
+                      <template if:true={item.attachmentsHtml}>
+                          <div class="slds-m-top_small" 
+                               style="margin-left: -0.75rem; margin-right: -0.75rem; margin-bottom: -0.75rem; 
+                                      padding: 0.5rem 0.75rem; 
+                                      background-color: inherit;
+                                      border-bottom-left-radius: 0.25rem; border-bottom-right-radius: 0.25rem;">
+              
+                              <div data-attachments-collapsed-id={item.id} lwc:dom="manual" onclick={handleGlobalClick}></div>
+                          </div>
+                      </template>
+                  </template>
+
                 </template>
-            </template>
-            <template if:false={hasData}>
-                <template if:false={isLoading}>
-                    <p class="slds-align_absolute-center">No items found.</p>
+                <template if:true={item.isExpanded}>
+                  <div class="slds-m-top_small slds-p-top_small slds-border_top" style="position: relative;">
+                    <template if:true={item.isEmailCategory}>
+                      <div class="slds-text-body_small slds-m-bottom_small">
+                        <div class="slds-m-bottom_xx-small">
+                          <span class="slds-text-color_weak">From: </span>
+                          <b>{item.author}</b>
+                        </div>
+                        <template if:true={item.emailTo}>
+                          <div class="slds-m-bottom_xx-small">
+                            <span class="slds-text-color_weak">To: </span>
+                            <span data-expanded-to={item.id} lwc:dom="manual"></span>
+                          </div>
+                        </template>
+                        <template if:true={item.emailCc}>
+                          <div class="slds-m-bottom_xx-small">
+                            <span class="slds-text-color_weak">Cc: </span>
+                            <span data-expanded-cc={item.id} lwc:dom="manual"></span>
+                          </div>
+                        </template>
+                        <template if:true={item.emailBcc}>
+                          <div class="slds-m-bottom_xx-small">
+                            <span class="slds-text-color_weak">Bcc: </span>
+                            <span data-expanded-bcc={item.id} lwc:dom="manual"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+                    <template if:false={item.isEmailCategory}>
+                      <div class="slds-text-body_small slds-m-bottom_small">
+                        <span>
+                          From:
+                          <b>
+                            {item.author}
+                          </b>
+                        </span>
+                      </div>
+                    </template>
+                    <div class="email-body-main" data-body-id={item.id} lwc:dom="manual">
+                    </div>
+                    <template if:true={item.hasHistory}>
+                      <template if:false={item.historyExpanded}>
+                        <div class="slds-m-top_small">
+                          <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id}
+                          class="slds-text-link_reset slds-text-color_brand">
+                            <lightning-icon icon-name="utility:chevronright" size="xx-small" class="slds-m-right_xx-small">
+                            </lightning-icon>
+                            <b>
+                              Show History...
+                            </b>
+                          </a>
+                        </div>
+                      </template>
+                      <template if:true={item.historyExpanded}>
+                        <div class="slds-m-top_small slds-theme_shade" style="border-radius: 4px; position:relative;">
+                          <div class="sticky-history-top">
+                            <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id}
+                            class="slds-grid slds-grid_vertical-align-center slds-text-link_reset slds-text-color_weak">
+                              <lightning-icon icon-name="utility:chevrondown" size="xx-small" class="slds-m-right_small">
+                              </lightning-icon>
+                              <b>
+                                Hide History
+                              </b>
+                            </a>
+                          </div>
+                          <div class="slds-p-around_small email-history-content" data-history-id={item.id}
+                          lwc:dom="manual">
+                          </div>
+                          <div class="sticky-history-bottom">
+                            <a href="javascript:void(0);" onclick={handleHistoryToggle} data-id={item.id}
+                            class="slds-button slds-button_neutral slds-button_stretch">
+                              <lightning-icon icon-name="utility:chevronup" size="xx-small" class="slds-m-right_small">
+                              </lightning-icon>
+                              <b>
+                                Hide History (Show Less)
+                              </b>
+                            </a>
+                          </div>
+                        </div>
+                      </template>
+                    </template>
+                    
+                    <template if:true={item.attachmentsHtml}>
+                      <div class="email-attachments" data-attachments-id={item.id} lwc:dom="manual" onclick={handleGlobalClick}></div>
+                    </template>
+
+                  </div>
                 </template>
+              </div>
+                                                                      <template if:true={item.isExpanded}>
+                                                                        <template if:true={item.comments}>
+                                                                          <div class={item.commentBoxClass}>
+                                                                            <h3 class="slds-text-title_caps slds-text-color_weak slds-p-around_x-small slds-border_bottom slds-m-bottom_none">
+                                                                                <strong>Comments</strong>
+                                                                            </h3>
+                                                                            
+                                                                            <template for:each={item.comments} for:item="comment">
+                                                                              <div key={comment.id} class="slds-p-horizontal_small slds-p-vertical_x-small comment-item">
+                                                                                <div class="slds-grid slds-grid_vertical-align-center slds-m-bottom_xx-small">
+                                                                                  <div class="slds-text-body_small slds-m-right_small"><b>{comment.author}</b></div>
+                                                                                  <div class="slds-text-body_small slds-text-color_weak">
+                                                                                    <lightning-formatted-date-time value={comment.createdDate} 
+                                                                                      year="numeric" month="short" day="2-digit" 
+                                                                                      hour="2-digit" minute="2-digit">
+                                                                                    </lightning-formatted-date-time>
+                                                                                  </div>
+                                                                                </div>
+                                                                                <div class="slds-text-longform">
+                                                                                  <lightning-formatted-rich-text value={comment.body}></lightning-formatted-rich-text>
+                                                                                </div>
+                                                                              </div>
+                                                                            </template>
+                                                        
+                                                                            <!-- FUTURE USE: Add Comment Section
+                                                                            <div class="slds-p-around_small slds-border_top">
+                                                                                <div class="slds-grid slds-grid_vertical-align-center">
+                                                                                    <div class="slds-col slds-grow">
+                                                                                        <lightning-input type="text" variant="label-hidden" 
+                                                                                            placeholder="Write a comment..." 
+                                                                                            data-id={item.id}
+                                                                                            value={item.draftComment}
+                                                                                            onchange={handleAddCommentChange}>
+                                                                                        </lightning-input>
+                                                                                    </div>
+                                                                                    <div class="slds-col slds-no-flex slds-m-left_small">
+                                                                                        <lightning-button label="Post" variant="brand" 
+                                                                                            data-id={item.id}
+                                                                                            onclick={handlePostComment}>
+                                                                                        </lightning-button>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                            -->
+                                                        
+                                                                          </div>
+                                                                        </template>
+                                                                      </template>
+                </div>
             </template>
+          </template>
+        </template>
+        <!-- Sentinel element for Infinite Scrolling (Hidden when viewing files) -->
+        <template if:false={showFiles}>
+            <div if:true={hasMoreItems} class="infinite-scroll-sentinel" lwc:dom="manual" style="height: 10px;"></div>
+            
+            <template if:true={isLoadingMore}>
+                <div class="slds-p-vertical_small slds-align_absolute-center">
+                    <lightning-spinner alternative-text="Loading more..." size="small"></lightning-spinner>
+                </div>
             </template>
+        </template>
+      </template>
+    </div>
+  </lightning-card>
+  <template if:true={isSettingsOpen}>
+    <section role="dialog" tabindex="-1" class="slds-modal slds-fade-in-open">
+      <div class="slds-modal__container">
+        <header class="slds-modal__header">
+          <button class="slds-button slds-button_icon slds-modal__close slds-button_icon-inverse"
+          title="Close" onclick={handleModalClose}>
+            <lightning-icon icon-name="utility:close" alternative-text="close" variant="inverse"
+            size="small">
+            </lightning-icon>
+            <span class="slds-assistive-text">
+              Close
+            </span>
+          </button>
+          <h2 class="slds-text-heading_medium slds-hyphenate">
+            Timeline Configuration
+          </h2>
+        </header>
+        <div class="slds-modal__content slds-p-around_medium">
+          <lightning-record-edit-form object-api-name="Custom_Configuration__c"
+          record-id={configId} onsuccess={handleSettingsSuccess}>
+            <lightning-messages>
+            </lightning-messages>
+            <div class="slds-grid slds-gutters">
+              <div class="slds-col slds-size_1-of-2">
+                <h3 class="slds-text-title_caps slds-m-bottom_small">
+                  Display Defaults
+                </h3>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Show Email Default
+                    </label>
+                    <lightning-helptext content="If enabled, email messages will show by default when loaded.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Show_Email_Default__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Show Internal Default
+                    </label>
+                    <lightning-helptext content="If enabled, internal chatter messages will show by default when loaded.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Show_Internal_Default__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Show Public Default
+                    </label>
+                    <lightning-helptext content="If enabled, public chatter messages will show by default when loaded.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Show_Public_Default__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Show System Default
+                    </label>
+                    <lightning-helptext content="If enabled, system messages will show by default when loaded.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Show_Sytem_Default__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Expand by Default
+                    </label>
+                    <lightning-helptext content="If enabled, timeline items will be expanded by default when loaded.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Expand_by_default__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Newest First
+                    </label>
+                    <lightning-helptext content="If checked, timeline will default to showing newest items first. If unchecked, timeline will default to showing oldest items first.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Newest_First__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                        <label class="slds-form-element__label slds-m-bottom_none">Use System Toast for Updates</label>
+                        <lightning-helptext content="If checked, new data notifications will appear as a standard Salesforce toast. If unchecked, a custom reload button will appear on the timeline."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Toast_for_new_data__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                        <label class="slds-form-element__label slds-m-bottom_none">Show Attachments Collapsed</label>
+                        <lightning-helptext content="If enabled, attachment icons will be visible even when the timeline item is collapsed."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Show_Attachments_Collapsed__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
+                <div class="slds-form-element slds-m-bottom_small">
+                    <div class="slds-grid slds-grid_vertical-align-center">
+                         <label class="slds-form-element__label slds-m-bottom_none">Collapsed Preview Lines</label>
+                         <lightning-helptext content="Number of text lines to display when an item is collapsed. Default is 1."></lightning-helptext>
+                    </div>
+                    <div class="slds-form-element__control">
+                        <lightning-input-field field-name="Collapsed_Preview_Lines__c" variant="label-hidden"></lightning-input-field>
+                    </div>
+                </div>
+
+              </div>
+              <div class="slds-col slds-size_1-of-2">
+                <h3 class="slds-text-title_caps slds-m-bottom_small">
+                  Performance & Limits
+                </h3>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Batch Size
+                    </label>
+                    <lightning-helptext content="Amount of objects to load per batch. Default is 10.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Batch_Size__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Visible Email Character Limit
+                    </label>
+                    <lightning-helptext content="Set this value to 0 to disable truncation completely. Default is 1950.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Visible_Character_Limit__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Polling Interval
+                    </label>
+                    <lightning-helptext content="The amount of time (in seconds) between polling requests for new information. Default is 15 seconds.">
+                    </lightning-helptext>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Polling_Interval__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+                <div class="slds-form-element slds-m-bottom_small">
+                  <div class="slds-grid slds-grid_vertical-align-center">
+                    <label class="slds-form-element__label slds-m-bottom_none">
+                      Notifications
+                    </label>
+                  </div>
+                  <div class="slds-form-element__control">
+                    <lightning-input-field field-name="Notifications__c" variant="label-hidden">
+                    </lightning-input-field>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="slds-m-top_medium slds-text-align_right">
+              <lightning-button class="slds-m-right_small" variant="neutral" label="Cancel"
+              onclick={handleModalClose}>
+              </lightning-button>
+              <lightning-button variant="brand" type="submit" label="Save Settings">
+              </lightning-button>
+            </div>
+          </lightning-record-edit-form>
         </div>
-    </lightning-card>
+      </div>
+    </section>
+    <div class="slds-backdrop slds-backdrop_open">
+    </div>
+  </template>
 </template>

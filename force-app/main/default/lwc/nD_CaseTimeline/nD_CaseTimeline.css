@@ -6,6 +6,16 @@
     overflow-y: auto;
 }
 
+.timeline-container {
+    height: 70vh;
+}
+
+@media only screen and (max-width: 48em) {
+    .timeline-container {
+        height: 85vh;
+    }
+}
+
 /* Outgoing email badge styling */
 .outgoing-email-badge {
     background-color: #FFF8D6 !important;
@@ -147,4 +157,174 @@ lightning-formatted-rich-text img {
 /* Keep the strong tag visible */
 .title-link strong {
     font-weight: bold;
+}
+
+/* ---------------------------------------------------------
+   NEW: Email Attachment Styling (Moves inline styles here)
+   --------------------------------------------------------- */
+.email-attachment-link {
+    display: inline-flex !important; /* Forces the box shape */
+    align-items: center;
+    margin: 4px 8px 4px 0;
+    padding: 6px 10px;
+    background-color: #f3f2f2;
+    border: 1px solid #c9c7c5;
+    border-radius: 3px;
+    text-decoration: none !important;
+    color: #0176d3 !important;
+    font-size: 0.8125rem;
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.email-attachment-link:hover {
+    background-color: #e5e5e5;
+    text-decoration: none;
+}
+
+.attachment-icon {
+    margin-right: 6px;
+    font-size: 1.1em;
+}
+/* ... Keep existing CSS ... */
+
+.cursor-pointer {
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+.cursor-pointer:hover {
+    background-color: rgba(0,0,0,0.02);
+    border-radius: 4px;
+}
+.sticky-history-top {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(4px);
+    border-bottom: 1px solid #dddbda;
+    
+    /* Pull up and out to cover padding */
+    margin: -1rem -1rem 0 -1rem; 
+    padding: 8px 1rem;
+    
+    text-align: left;
+    border-radius: 4px 4px 0 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.slds-scrollable_y > div:first-child {
+    margin-top: 0 !important;
+}
+
+/* Ensure sticky top pulls fully up */
+.sticky-history-top {
+    /* Keep your existing styles */
+    /* Ensure top is exactly 0 */
+    top: 0 !important;
+}
+.sticky-history-control {
+    position: sticky;
+    bottom: -1rem; /* Pushes it down into the padding area */
+    z-index: 100;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(4px);
+    border-top: 1px solid #dddbda;
+    margin: 0 -1rem -1rem -1rem; /* Stretches full width */
+    border-radius: 0 0 4px 4px;
+    padding: 10px;
+    text-align: center;
+}
+/* Restore paragraph spacing for Email Bodies */
+.email-body-main p {
+    margin-bottom: 1em; /* Adds a blank line after every paragraph */
+    line-height: 1.5;   /* Improves readability */
+}
+
+/* Ensure Lists inside emails also have spacing */
+.email-body-main ul,
+.email-body-main ol {
+    margin-bottom: 1em;
+}
+
+/* Optional: Handling for specific Outlook/Word styles that might use divs instead of p */
+.email-body-main div {
+    min-height: 1.2em; /* Ensures empty lines are not collapsed to 0 height */
+}
+
+/* Email Info Popover Styling */
+.slds-popover_panel {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.slds-popover__body dl.slds-list_horizontal {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.5rem;
+    align-items: start;
+}
+
+.slds-popover__body .slds-item_label {
+    font-weight: 600;
+    padding-top: 0.125rem;
+}
+
+.slds-popover__body .slds-item_detail {
+    word-wrap: break-word;
+    white-space: normal;
+}
+
+/* Email Recipient Links */
+.email-recipient-link {
+    color: #0176d3 !important;
+    text-decoration: none !important;
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.email-recipient-link:hover {
+    text-decoration: underline !important;
+    color: #014486 !important;
+}
+
+/* Comment Thread Styling */
+.comment-container {
+    margin-left: 1.5rem; /* Reduced indentation */
+    margin-top: -1px;  /* Glued overlap */
+    border-top-left-radius: 0 !important;
+    border-top-right-radius: 0 !important;
+    border-top: 1px solid #dddbda; /* Optional separator from main box */
+}
+
+/* Ensure individual comments share the background */
+.comment-item {
+    background-color: inherit !important;
+    border-top: 1px solid rgba(0,0,0,0.08); /* Subtle separator */
+}
+
+/* Remove border from the first comment so it flows from header */
+.comment-item:first-of-type {
+    border-top: none;
+}
+
+/* Remove extra space from the last comment */
+.comment-item:last-child {
+    margin-bottom: 0 !important;
+    padding-bottom: 0.25rem;
+}
+
+/* Remove paragraph margins to eliminate "newline" whitespace */
+.comment-item p {
+    margin-bottom: 0 !important;
+}
+
+/* Zebra striping - subtle dark overlay works on both white and yellow */
+.comment-item:nth-of-type(even) {
+    background-color: rgba(0, 0, 0, 0.03) !important; 
+}
+
+.main-item-glued {
+    border-bottom-left-radius: 0 !important;
+    border-bottom-right-radius: 0 !important;
+    margin-bottom: 0 !important;
 }
